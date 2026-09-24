@@ -1,0 +1,230 @@
+/* ------------------------------------------------------------------ demo player */
+
+.player {
+	--cols: 92;
+	--rows: 26;
+	/* Paper terminal by default: the TUI's palette is built for cream paper. The recording
+	   refers to --term-fg / --term-bg for inverse video, so both themes stay consistent. */
+	--term-bg: #f8f5ee;
+	--term-fg: #262c1c;
+	--term-dim: #7c806d;
+	--term-rule: rgba(44, 51, 34, 0.14);
+	position: relative;
+	/* Exactly --cols columns at the 15px maximum font size (0.6em advance) plus padding. */
+	max-width: calc(var(--cols) * 9px + 42px);
+	margin: 0 auto;
+	border: 1px solid var(--rule-strong);
+	border-radius: 12px;
+	background: var(--term-bg);
+	color: var(--term-fg);
+	box-shadow: 0 40px 80px -52px rgba(35, 41, 25, 0.55), 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+	overflow: hidden;
+	container-type: inline-size;
+}
+
+.player[data-theme="dark"] {
+	--term-bg: #222a1e;
+	--term-fg: #e7e5d4;
+	--term-dim: #9aa38c;
+	--term-rule: rgba(231, 229, 212, 0.12);
+	border-color: transparent;
+	box-shadow: 0 40px 80px -48px rgba(35, 41, 25, 0.7);
+}
+
+.player .cmd-dot {
+	background: var(--term-rule);
+}
+
+.player-bar {
+	gap: 7px;
+	height: 42px;
+	background: color-mix(in srgb, var(--term-fg) 3%, transparent);
+}
+
+.player-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	margin-left: auto;
+	height: 28px;
+	padding: 0 12px 0 10px;
+	border: 1px solid var(--term-rule);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--term-fg) 4%, transparent);
+	color: var(--term-fg);
+	font-family: var(--font-mono);
+	font-size: 12px;
+	cursor: pointer;
+	transition: border-color 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.player-btn:hover {
+	border-color: color-mix(in srgb, var(--term-fg) 35%, transparent);
+	background: color-mix(in srgb, var(--term-fg) 8%, transparent);
+}
+
+.player-btn .icon {
+	width: 13px;
+	height: 13px;
+}
+
+.player-btn .icon-pause,
+.player-btn .icon-replay {
+	display: none;
+}
+
+.player[data-state="playing"] .player-btn .icon-play {
+	display: none;
+}
+
+.player[data-state="playing"] .player-btn .icon-pause {
+	display: block;
+}
+
+.player[data-state="ended"] .player-btn .icon-play {
+	display: none;
+}
+
+.player[data-state="ended"] .player-btn .icon-replay {
+	display: block;
+}
+
+.player-screen {
+	/* Size the font so exactly --cols columns fill the width (IBM Plex Mono advances 0.6em). */
+	--fs: min(15px, calc((100cqw - 40px) / (var(--cols) * 0.6)));
+	padding: 14px 20px 16px;
+	font-family: var(--font-mono);
+	font-size: var(--fs);
+	line-height: 1.32;
+	font-variant-ligatures: none;
+	overflow: hidden;
+}
+
+.player-rows {
+	height: calc(var(--rows) * 1.32em);
+	white-space: pre;
+}
+
+.player-row {
+	height: 1.32em;
+	overflow: hidden;
+}
+
+.player-row span {
+	display: inline;
+}
+
+.player-cursor {
+	outline: 1px solid color-mix(in srgb, var(--term-fg) 70%, transparent);
+	outline-offset: -1px;
+}
+
+.player[data-state="playing"] .player-cursor {
+	background: color-mix(in srgb, var(--term-fg) 75%, transparent);
+	color: var(--term-bg);
+	outline: none;
+}
+
+.player-progress {
+	position: relative;
+	height: 3px;
+	background: var(--term-rule);
+	cursor: pointer;
+}
+
+.player-progress:hover,
+.player-progress:focus-visible {
+	height: 5px;
+	margin-top: -2px;
+}
+
+.player-progress-fill {
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: 0;
+	background: linear-gradient(90deg, #7f9a68, #a893c4);
+}
+
+.player-noscript,
+.player-empty {
+	padding: 40px 24px;
+	text-align: center;
+	font-family: var(--font-mono);
+	font-size: 14px;
+	color: var(--term-dim);
+	white-space: normal;
+}
+
+.player-overlay {
+	position: absolute;
+	inset: 42px 0 3px;
+	display: grid;
+	place-items: center;
+	background: color-mix(in srgb, var(--term-bg) 35%, transparent);
+	border: 0;
+	color: var(--term-fg);
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.2s var(--ease);
+}
+
+/* Only before the first play (e.g. with reduced motion); at the end the final screen stays
+   readable and the bar button offers "Replay". */
+.player[data-state="idle"] .player-overlay {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.player[data-state="ended"] .player-screen {
+	cursor: pointer;
+}
+
+.player-overlay > span {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 22px 12px 18px;
+	border-radius: 999px;
+	background: var(--btn);
+	color: var(--on-btn);
+	font-family: var(--font-mono);
+	font-size: 14px;
+	box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.5);
+	transition: transform 0.2s var(--ease);
+}
+
+.player-overlay:hover > span {
+	transform: scale(1.03);
+}
+
+.player-overlay .icon {
+	width: 14px;
+	height: 14px;
+}
+
+/* ANSI attributes */
+.player .b {
+	font-weight: 600;
+}
+
+.player .i {
+	font-style: italic;
+}
+
+.player .u {
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.player .s {
+	text-decoration: line-through;
+}
+
+.player .d {
+	opacity: 0.62;
+}
+
+.player .h {
+	visibility: hidden;
+}

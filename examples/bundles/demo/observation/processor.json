@@ -1,0 +1,17 @@
+{
+  "format": "lily.processor/v1",
+  "description": "Keep search output short: long grep/rg results waste context.",
+  "tools": {
+    "bash": [
+      {
+        "name": "short-search-results",
+        "when": { "command": "^\\s*(grep|rg)\\b", "outputLinesGt": 200 },
+        "steps": [
+          { "op": "truncateLines", "maxChars": 300 },
+          { "op": "head", "lines": 200 },
+          { "op": "note" }
+        ]
+      }
+    ]
+  }
+}

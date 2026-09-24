@@ -1,0 +1,282 @@
+[
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  },
+  {
+    "text": "Let me look around the workspace.",
+    "toolCalls": [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "ls -la && git status 2>/dev/null | head -5"
+        }
+      }
+    ]
+  },
+  {
+    "text": "This is the offline scripted model: it lists the workspace and replies. Configure a real model with `lily config model <provider/model>`."
+  }
+]

@@ -1,0 +1,70 @@
+{
+  "name": "lily-harness",
+  "version": "0.1.0",
+  "description": "Lily: a terminal coding agent whose every run is isolated, pinned and recorded — a daily agent and a clean trajectory generator",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saito-Karuha/Lily.git"
+  },
+  "homepage": "https://github.com/Saito-Karuha/Lily#readme",
+  "bugs": {
+    "url": "https://github.com/Saito-Karuha/Lily/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "lily": "./bin/lily.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/lib/index.d.ts",
+      "import": "./dist/lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "dist/lib/",
+    "dist/envd/",
+    "examples/bundles/",
+    "examples/scripts/",
+    "examples/routers/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": ["coding-agent", "agent-harness", "tui", "sandbox", "microvm", "trajectories", "llm"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest --run",
+    "build": "node scripts/build-envd.mjs && node scripts/build-lib.mjs",
+    "build:envd": "node scripts/build-envd.mjs",
+    "build:lib": "node scripts/build-lib.mjs",
+    "prepack": "npm run build",
+    "site:build": "npm --prefix site run build",
+    "site:demo": "npm --prefix site run record-demo",
+    "lily": "node bin/lily.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "diff": "8.0.4",
+    "tar": "7.5.22",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@earendil-works/pi-telemetry": "0.85.1",
+    "@earendil-works/chord": "0.85.1"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$comment": "What `npm run record-demo` does. Paths are relative to site/. Steps run in order against the real Lily TUI in a pseudo-terminal; gaps longer than idleLimit seconds are shortened in the replay, and the last screen is held for `hold` seconds.",
+  "cols": 92,
+  "rows": 24,
+  "lily": "../bin/lily.mjs",
+  "script": "../examples/scripts/chat.json",
+  "workspace": "demo/workspace",
+  "workspaceDir": "/tmp/tidy-notes",
+  "home": "/tmp/lily-demo-home",
+  "backend": null,
+  "title": "lily — /tmp/tidy-notes",
+  "idleLimit": 2.2,
+  "hold": 2.5,
+  "steps": [
+    { "waitFor": "Let good ideas run", "timeout": 30 },
+    { "idle": 1.0 },
+    { "pause": 0.4 },
+    { "type": "what's in this repo?" },
+    { "pause": 0.6 },
+    { "key": "enter" },
+    { "idle": 1.6, "timeout": 60 },
+    { "pause": 0.8 },
+    { "type": "/env", "delay": 0.14 },
+    { "pause": 0.7 },
+    { "key": "enter" },
+    { "idle": 1.2, "timeout": 20 },
+    { "end": true }
+  ]
+}

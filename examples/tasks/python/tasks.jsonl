@@ -1,0 +1,4 @@
+{"id": "calc-add", "group": "bugfix", "prompt": "The add function in calc.py returns wrong results. Fix it.", "repo": "calc-add/repo", "check": "calc-add/check.py"}
+{"id": "reverse-words", "group": "implement", "prompt": "Implement reverse_words in text_utils.py according to its docstring.", "repo": "reverse-words/repo", "check": "reverse-words/check.py"}
+{"id": "fizzbuzz", "group": "implement", "prompt": "Do the task described in README.md.", "repo": "fizzbuzz/repo", "check": "fizzbuzz/check.py"}
+{"id": "word-count", "group": "implement", "prompt": "Do the task described in README.md.", "repo": "word-count/repo", "check": "word-count/check.py"}

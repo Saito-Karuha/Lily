@@ -1,0 +1,43 @@
+/* Lily site tokens — cream paper, olive ink, a lavender wash (see lily_sample2.png). */
+:root {
+	--paper: #f2eee4;
+	--paper-deep: #ebe6d8;
+	--paper-sunk: #e4decd;
+	--card: #f6f3ea;
+
+	--ink: #2c3322;
+	--ink-strong: #232919;
+	--ink-2: #3d4430;
+	--ink-soft: #5f6550;
+	--ink-faint: #8a8c79;
+
+	--rule: rgba(44, 51, 34, 0.18);
+	--rule-strong: rgba(44, 51, 34, 0.4);
+	--rule-hero: #a9a898;
+
+	--btn: #3b4331;
+	--btn-hover: #2a3121;
+	--on-btn: #f2eee4;
+
+	--lavender: #d9d0df;
+	--lavender-soft: #e8e2ea;
+	--moss: #5d7548;
+	--moss-soft: #dfe3cf;
+
+	--term-bg: #222a1e;
+	--term-bg-2: #2a3325;
+	--term-fg: #e7e5d4;
+	--term-dim: #9aa38c;
+	--term-rule: rgba(231, 229, 212, 0.12);
+
+	--font-display: "Source Serif 4 Variable", "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, "Songti SC", "Noto Serif SC", serif;
+	--font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+	--font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace;
+
+	--gutter: clamp(20px, 4.95vw, 96px);
+	--page-max: 1320px;
+	--radius: 5px;
+	--radius-lg: 8px;
+	--ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+	--focus: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink);
+}

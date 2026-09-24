@@ -1,0 +1,68 @@
+/* highlight.js theme on paper: olive keywords, clay strings, faint comments. */
+.hljs {
+	color: var(--ink);
+	background: none;
+}
+
+.hljs-comment,
+.hljs-quote {
+	color: var(--ink-faint);
+	font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-meta .hljs-keyword {
+	color: #4f6a3a;
+	font-weight: 500;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-addition {
+	color: #95583c;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-bullet {
+	color: #7a5a86;
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-variable,
+.hljs-params {
+	color: #3f5f68;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_,
+.hljs-section,
+.hljs-name {
+	color: #2c4a2c;
+	font-weight: 550;
+}
+
+.hljs-type,
+.hljs-meta {
+	color: #6b6a3a;
+}
+
+.hljs-deletion {
+	color: #a24b3c;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: 600;
+}

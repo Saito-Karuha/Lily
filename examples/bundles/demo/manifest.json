@@ -1,0 +1,5 @@
+{
+  "format": "lily.bundle/v1",
+  "name": "demo",
+  "description": "Example bundle exercising every evolvable component (P, U, S, M, F)."
+}

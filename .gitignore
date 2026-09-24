@@ -1,0 +1,17 @@
+node_modules/
+site/node_modules/
+site/dist/
+dist/
+/envd/envd
+*.tgz
+*.log
+.DS_Store
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+!.env.sample
+.lily/
+.claude/
+.playwright-mcp/

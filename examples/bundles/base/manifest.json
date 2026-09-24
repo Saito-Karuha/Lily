@@ -1,0 +1,5 @@
+{
+  "format": "lily.bundle/v1",
+  "name": "base",
+  "description": "The base harness: the fixed kernel with no attached prompt, tool guidance, skills, memory or observation processing."
+}

@@ -1,0 +1,12 @@
+[
+  { "section": "Guide", "slug": "getting-started", "title": "Getting started", "file": "../docs/getting-started.md" },
+  { "section": "Guide", "slug": "tui", "title": "Using the TUI", "file": "../docs/tui.md" },
+  { "section": "Guide", "slug": "configuration", "title": "Configuration", "file": "../docs/configuration.md" },
+  { "section": "Guide", "slug": "environments", "title": "Environments", "file": "../docs/environments.md" },
+  { "section": "Guide", "slug": "sdk", "title": "TypeScript SDK", "file": "../docs/sdk.md" },
+  { "section": "Reference", "slug": "architecture", "title": "Architecture", "file": "../docs/architecture.md" },
+  { "section": "Reference", "slug": "api", "title": "HTTP API", "file": "../docs/api.md" },
+  { "section": "Reference", "slug": "bundle-format", "title": "Bundle format", "file": "../docs/bundle-format.md" },
+  { "section": "Reference", "slug": "trajectory-format", "title": "Trajectory format", "file": "../docs/trajectory-format.md" },
+  { "section": "Reference", "slug": "envd-protocol", "title": "envd protocol", "file": "../docs/envd-protocol.md" }
+]

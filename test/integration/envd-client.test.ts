@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listArchive, packDirectory } from "../../src/env/archive.ts";
 import { EnvdError } from "../../src/env/envd-client.ts";
 import type { EnvironmentLease } from "../../src/env/types.ts";
+import { PACKAGE_VERSION } from "../../src/util/package.ts";
 import { localEnvironment, tempDir } from "../helpers/env.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -24,6 +25,10 @@ afterAll(async () => {
 });
 
 describe("envd client over a local environment", () => {
+	it("talks to a guest agent built for this package version", () => {
+		expect(lease.info.guest.envdVersion).toBe(PACKAGE_VERSION);
+	});
+
 	it("initializes the workspace by copying (the host source is untouched)", async () => {
 		const ws = lease.info.paths.workspace;
 		expect(ws).not.toBe(source);

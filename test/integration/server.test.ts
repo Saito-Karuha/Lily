@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { LilyRuntime } from "../../src/runtime/runtime.ts";
@@ -68,7 +69,7 @@ afterAll(async () => {
 
 describe("HTTP API", () => {
 	it("serves status, models, environments and bundles", async () => {
-		expect((await api("/api/status")).version).toBe("0.1.0");
+		expect((await api("/api/status")).version).toBe(JSON.parse(await readFile(join(import.meta.dirname, "../../package.json"), "utf8")).version);
 		expect((await api("/api/models")).some((m: any) => m.provider === "faux")).toBe(true);
 		const envs = await api("/api/environments");
 		expect(envs.backends.find((b: any) => b.name === "local").available).toBe(true);

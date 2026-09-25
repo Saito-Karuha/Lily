@@ -8,6 +8,7 @@ import { JsonlFile, readJson, readJsonIfExists, writeJsonAtomic } from "../util/
 import type { Digest } from "../util/hash.ts";
 import { safeSegment } from "./home.ts";
 
+/** Identifies the kernel's model-visible behavior (tools, rendering, system prompt). Bump it when that changes, not on every release. */
 export const LILY_KERNEL_VERSION = "lily-kernel/0.1.0";
 
 /** Everything that determined a run's conditions, frozen before the first model call. */

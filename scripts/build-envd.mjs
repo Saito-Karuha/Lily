@@ -6,7 +6,7 @@
 // Binaries are static (CGO_ENABLED=0) and stripped. --host-only builds just the current platform.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,7 @@ const GOARCH_BY_ARCH = { x64: "amd64", arm64: "arm64" };
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const moduleDir = join(repoRoot, "envd");
 const outRoot = join(repoRoot, "dist", "envd");
+const { version } = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 
 function fail(message) {
   console.error(`build-envd: ${message}`);
@@ -53,7 +54,7 @@ function build({ goos, goarch }) {
   mkdirSync(dirname(out), { recursive: true });
   const result = spawnSync(
     "go",
-    ["build", "-trimpath", "-buildvcs=false", "-ldflags", "-s -w", "-o", out, "."],
+    ["build", "-trimpath", "-buildvcs=false", "-ldflags", `-s -w -X main.version=${version}`, "-o", out, "."],
     {
       cwd: moduleDir,
       env: { ...process.env, CGO_ENABLED: "0", GOOS: goos, GOARCH: goarch },

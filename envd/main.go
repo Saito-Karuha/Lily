@@ -17,7 +17,8 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+// Set to the lily-harness version by scripts/build-envd.mjs (-ldflags "-X main.version=...").
+var version = "dev"
 
 const usage = `usage:
   lily-envd serve --stdio [--cwd DIR] [--tmp DIR] [--home DIR] [--join-pids-cgroup]

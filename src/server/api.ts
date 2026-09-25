@@ -6,9 +6,10 @@ import { readBinding } from "../runtime/session.ts";
 import { listRunIds, RunStore } from "../store/runs.ts";
 import { exportRun } from "../trajectory/export.ts";
 import { renderTrajectoryMarkdown } from "../trajectory/render-md.ts";
+import { PACKAGE_VERSION } from "../util/package.ts";
 import { HANDLED, HttpError, Router } from "./http.ts";
 
-export const LILY_VERSION = "0.1.0";
+export const LILY_VERSION = PACKAGE_VERSION;
 
 function requireString(value: unknown, name: string): string {
 	if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, `${name} is required`);

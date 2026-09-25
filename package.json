@@ -1,6 +1,6 @@
 {
   "name": "lily-harness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lily: a terminal coding agent whose every run is isolated, pinned and recorded — a daily agent and a clean trajectory generator",
   "type": "module",
   "repository": {
@@ -35,7 +35,15 @@
     "README.md",
     "CHANGELOG.md"
   ],
-  "keywords": ["coding-agent", "agent-harness", "tui", "sandbox", "microvm", "trajectories", "llm"],
+  "keywords": [
+    "coding-agent",
+    "agent-harness",
+    "tui",
+    "sandbox",
+    "microvm",
+    "trajectories",
+    "llm"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest --run",

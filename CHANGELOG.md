@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 — 2026-09-25
+
+**Fixes**
+- `lily --version`, the TUI header, the HTTP API and the SDK's `LILY_VERSION` reported 0.1.0 in the 0.1.1 package. They now read the version from the package, and `lily-envd` is built with the same version.
+
 ## 0.1.1 — 2026-09-25
 
 **Fixes**

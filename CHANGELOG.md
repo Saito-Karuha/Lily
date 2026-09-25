@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 — 2026-09-25
+
+**Fixes**
+- Every command failed with `ENOTDIR` when `~/.lily/envs` contained a file, such as the `.DS_Store` that Finder creates when the folder is opened. The startup sweep now only looks at directories.
+
+**Docs**
+- Getting started explains how to uninstall. Registered bundles are stored read-only, so removing `~/.lily` needs `chmod -R u+w` before `rm -rf`.
+
+**Releases**
+- The release workflow can publish to npm with trusted publishing (repository variable `NPM_TRUSTED_PUBLISHING`).
+
 ## 0.1.0 — 2026-09-25
 
 First release of Lily.

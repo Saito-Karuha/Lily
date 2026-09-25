@@ -47,7 +47,8 @@ export async function readJsonIfExists<T>(path: string): Promise<T | undefined> 
 	try {
 		return JSON.parse(await readFile(path, "utf8")) as T;
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ENOTDIR") return undefined;
 		throw error;
 	}
 }

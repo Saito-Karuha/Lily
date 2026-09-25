@@ -73,3 +73,13 @@ lily export <run> --raw -o run.json   # full trajectory (lily.traj/v1)
 ```
 
 To drive Lily from code instead (evaluation scripts, trainers, services), see [sdk.md](sdk.md).
+
+## Uninstall
+
+```bash
+lily env sweep                              # remove environments a crashed Lily left behind
+npm uninstall -g lily-harness
+chmod -R u+w ~/.lily && rm -rf ~/.lily      # sessions, runs, bundles and config
+```
+
+Registered bundles are stored read-only so they cannot change after registration, which is why the data directory needs `chmod` before `rm -rf`. Keep `~/.lily` if you want to keep your recorded runs.

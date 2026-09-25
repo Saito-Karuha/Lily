@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -7,10 +7,10 @@ import { describe, expect, it } from "vitest";
 import { LocalBackend } from "../../src/env/backends/local.ts";
 import type { LedgerRecord } from "../../src/kernel/ledger.ts";
 import { LilyRuntime } from "../../src/runtime/runtime.ts";
-import { RunStore } from "../../src/store/runs.ts";
+import { listRunIds, RunStore } from "../../src/store/runs.ts";
 import { JsonlFile } from "../../src/util/fsx.ts";
 import { tempDir } from "../helpers/env.ts";
-import { turn } from "../helpers/runtime.ts";
+import { testRuntime, turn } from "../helpers/runtime.ts";
 
 const run = promisify(execFile);
 
@@ -46,6 +46,37 @@ describe("worker crash recovery", () => {
 			const roles = (await session.messages()).map((m) => m.role);
 			expect(roles[0]).toBe("user");
 			expect(roles.at(-1)).toBe("assistant");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("starts with files other tools leave in the data directory (Finder's .DS_Store)", async () => {
+		const t = await testRuntime();
+		t.faux.setResponses([turn.text("first"), turn.text("second")]);
+		const workspace = await tempDir("lily-ws-");
+		const session = await t.runtime.createSession({
+			mode: "interactive",
+			model: "faux/faux-1",
+			bundle: null,
+			environment: { backend: "local", initialState: { kind: "mount", path: workspace } },
+		});
+		expect((await (await session.prompt("hi")).done).status).toBe("completed");
+		await t.runtime.close();
+
+		const home = t.runtime.home;
+		for (const dir of [home.root, home.envs, home.sessions, home.sessionMetaRoot, home.runs]) await writeFile(join(dir, ".DS_Store"), "\0\0\0\u0001Bud1");
+		const models = createModels();
+		const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+		models.setProvider(faux.provider);
+		faux.setResponses([turn.text("after restart")]);
+		const runtime = await LilyRuntime.create({ home: home.root, config: { model: "faux/faux-1" }, models, backends: [new LocalBackend()] });
+		try {
+			expect(await runtime.envs.sweep()).toEqual([]);
+			expect((await runtime.listSessions()).map((s) => s.sessionId)).toEqual([session.id]);
+			expect(await listRunIds(runtime.home.runs)).toHaveLength(1);
+			const reopened = await runtime.openSession(session.id);
+			expect((await (await reopened.prompt("again")).done).finalText).toBe("after restart");
 		} finally {
 			await runtime.close();
 		}

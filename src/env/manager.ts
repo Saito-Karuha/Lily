@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { removeTree } from "../util/tree.ts";
@@ -164,14 +165,16 @@ export class EnvironmentManager {
 		// Only environments recorded in this home are ever swept: other Lily homes on the same
 		// machine (tests, a second server) run containers with the same naming scheme.
 		const ownedIds = new Set<string>();
-		let names: string[] = [];
+		let entries: Dirent[] = [];
 		try {
-			names = await readdir(this.#home.envs);
+			entries = await readdir(this.#home.envs, { withFileTypes: true });
 		} catch {
 			return removed;
 		}
-		for (const name of names) {
-			const dir = join(this.#home.envs, name);
+		for (const entry of entries) {
+			// Other tools leave files here (Finder's .DS_Store); only directories hold environments.
+			if (!entry.isDirectory()) continue;
+			const dir = join(this.#home.envs, entry.name);
 			const recordPath = join(dir, "env.json");
 			const record = await readJsonIfExists<EnvironmentRecord>(recordPath);
 			if (!record) continue;

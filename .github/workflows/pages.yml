@@ -1,10 +1,18 @@
 name: Release page
 
-# Builds site/ and publishes it with GitHub Pages. Runs for every release (called by release.yml when
-# the repository variable PAGES_ENABLED is "true") and on demand from the Actions tab.
+# Builds site/ and publishes it with GitHub Pages from main (the github-pages environment only accepts
+# deployments from the default branch). Runs when the site, the docs, the changelog or the version
+# change, and on demand. Set the repository variable PAGES_ENABLED to "true" once Pages is enabled.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "CHANGELOG.md"
+      - "package.json"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
@@ -17,6 +25,7 @@ concurrency:
 
 jobs:
   build:
+    if: vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

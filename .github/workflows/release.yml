@@ -5,7 +5,7 @@ name: Release
 # The workflow tests the tag, builds the npm package and the lily-envd binaries, publishes to npm when
 # the NPM_TOKEN secret is set and the version is not on npm yet, and creates the GitHub release with
 # notes from CHANGELOG.md. A version already on npm (for example published by hand) is attached as the
-# exact tarball from the registry.
+# exact tarball from the registry. The release page is deployed from main by pages.yml.
 on:
   push:
     tags: ["v*"]
@@ -104,12 +104,3 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" out/* --title "Lily $VERSION" --notes-file notes.md --verify-tag
           fi
-
-  pages:
-    needs: release
-    if: vars.PAGES_ENABLED == 'true'
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    uses: ./.github/workflows/pages.yml

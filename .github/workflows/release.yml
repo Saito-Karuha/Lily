@@ -3,9 +3,11 @@ name: Release
 # Push a tag vX.Y.Z (matching package.json) to release:
 #   npm version patch && git push --follow-tags
 # The workflow tests the tag, builds the npm package and the lily-envd binaries, publishes to npm when
-# the NPM_TOKEN secret is set and the version is not on npm yet, and creates the GitHub release with
-# notes from CHANGELOG.md. A version already on npm (for example published by hand) is attached as the
-# exact tarball from the registry. The release page is deployed from main by pages.yml.
+# the version is not on npm yet, and creates the GitHub release with notes from CHANGELOG.md. It
+# publishes with npm trusted publishing when the repository variable NPM_TRUSTED_PUBLISHING is "true"
+# (release.yml registered as the package's trusted publisher on npmjs.com), else with the NPM_TOKEN
+# secret when it is set, else not at all. A version already on npm (for example published by hand) is
+# attached as the exact tarball from the registry. The release page is deployed from main by pages.yml.
 on:
   push:
     tags: ["v*"]
@@ -39,6 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -70,19 +73,24 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
           PUBLIC_REPO: ${{ !github.event.repository.private }}
         run: |
           if npm view "lily-harness@$VERSION" version >/dev/null 2>&1; then
             echo "lily-harness@$VERSION is already on npm; attaching the registry tarball."
             rm out/lily-harness-*.tgz
             (cd out && npm pack "lily-harness@$VERSION")
+          elif [ "$TRUSTED_PUBLISHING" = "true" ]; then
+            # Trusted publishing needs npm 11.5.1 or newer; npm adds provenance for public repositories.
+            npm install -g npm@11
+            npm publish "out/lily-harness-$VERSION.tgz" --access public
           elif [ -n "$NODE_AUTH_TOKEN" ]; then
             flags="--access public"
             # npm only issues provenance statements for public source repositories.
             if [ "$PUBLIC_REPO" = "true" ]; then flags="$flags --provenance"; fi
             npm publish "out/lily-harness-$VERSION.tgz" $flags
           else
-            echo "::warning::NPM_TOKEN is not set and lily-harness@$VERSION is not on npm: skipping npm publish."
+            echo "::warning::lily-harness@$VERSION is not on npm and no publishing method is configured: skipping npm publish."
           fi
 
       - name: Release notes from CHANGELOG.md

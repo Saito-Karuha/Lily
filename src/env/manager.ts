@@ -201,6 +201,8 @@ class Lease implements EnvironmentLease {
 	readonly #instance: BackendInstance;
 	readonly #onEnd: (status: EnvironmentStatus) => Promise<void>;
 	#ended = false;
+	/** The one teardown; later destroy()/markLost() callers wait for it instead of returning early. */
+	#ending: Promise<void> | undefined;
 
 	constructor(info: EnvironmentInfo, instance: BackendInstance, onEnd: (status: EnvironmentStatus) => Promise<void>) {
 		this.info = info;
@@ -225,21 +227,21 @@ class Lease implements EnvironmentLease {
 		return this.#instance.client.download(this.info.paths.workspace);
 	}
 
-	async destroy(): Promise<void> {
-		if (this.#ended) return;
-		this.#ended = true;
-		try {
-			await this.#instance.destroy();
-		} finally {
-			await this.#onEnd("destroyed");
-		}
+	destroy(): Promise<void> {
+		return this.#end("destroyed");
 	}
 
-	async markLost(): Promise<void> {
-		if (this.#ended) return;
-		this.#ended = true;
-		await this.#instance.destroy().catch(() => {});
-		await this.#onEnd("lost");
+	markLost(): Promise<void> {
+		return this.#end("lost").catch(() => {});
+	}
+
+	#end(status: "destroyed" | "lost"): Promise<void> {
+		if (!this.#ending) {
+			this.#ended = true;
+			const teardown = status === "lost" ? this.#instance.destroy().catch(() => {}) : this.#instance.destroy();
+			this.#ending = teardown.finally(() => this.#onEnd(status));
+		}
+		return this.#ending;
 	}
 }
 

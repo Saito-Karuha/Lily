@@ -88,6 +88,40 @@ async function makeRuntime(options: GlobalOptions): Promise<LilyRuntime> {
 	return runtime;
 }
 
+/**
+ * Destroys the runtime's environments when the process is told to stop (terminal closed,
+ * `kill`, Ctrl+C outside the TUI). Container and VM environments outlive this process otherwise.
+ */
+function closeOnSignals(runtime: LilyRuntime, before?: () => void): void {
+	let closing = false;
+	const stop = (signal: NodeJS.Signals) => {
+		if (closing) return;
+		closing = true;
+		const code = 128 + ({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 } as Record<string, number>)[signal]!;
+		setTimeout(() => process.exit(code), 15_000).unref();
+		// A closed terminal turns later writes into EIO/EPIPE errors; they must not abort the cleanup.
+		process.stdout.on("error", () => {});
+		process.stderr.on("error", () => {});
+		try {
+			before?.();
+			if (signal !== "SIGHUP") restoreTerminal();
+		} catch {
+			// best effort
+		}
+		void runtime
+			.close()
+			.catch(() => {})
+			.finally(() => process.exit(code));
+	};
+	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const) process.on(signal, stop);
+}
+
+/** Undoes what the TUI set up (raw mode, bracketed paste, keyboard protocols, hidden cursor) when it cannot stop itself. */
+function restoreTerminal(): void {
+	if (process.stdin.isTTY) process.stdin.setRawMode?.(false);
+	if (process.stdout.isTTY) process.stdout.write("\x1b[?2004l\x1b[<u\x1b[>4;0m\x1b[?25h\n");
+}
+
 function resolveModel(runtime: LilyRuntime, options: GlobalOptions): string {
 	if (options.script) return SCRIPT_MODEL;
 	const model = options.model ?? runtime.config.model;
@@ -457,18 +491,13 @@ export async function main(argv: string[]): Promise<void> {
 			server.listen(port, host, () =>
 				console.log(`${c.leaf(LILY_MARK)} lily API on ${c.underline(`http://${host}:${port}/api`)}${runtime.router ? c.muted(`  (router ${runtime.router.name})`) : ""}`),
 			);
-			const shutdown = async () => {
-				server.close();
-				await runtime.close();
-				process.exit(0);
-			};
-			process.on("SIGINT", () => void shutdown());
-			process.on("SIGTERM", () => void shutdown());
+			closeOnSignals(runtime, () => server.close());
 			return;
 		}
 		default: {
 			// Interactive / print mode. Anything that is not a command is the prompt.
 			const runtime = await makeRuntime(options);
+			closeOnSignals(runtime);
 			if (!(typeof values.print === "string" || (!process.stdin.isTTY && command))) {
 				// The TUI resolves the session itself and shows a setup screen when no model is usable.
 				const code = await runInteractive(runtime, {

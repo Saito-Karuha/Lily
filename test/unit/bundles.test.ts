@@ -64,7 +64,7 @@ describe("bundle format", () => {
 });
 
 describe("bundle registry", () => {
-	it("publishes immutably, resolves refs and prefixes, and composes student views", async () => {
+	it("publishes immutably, resolves refs and prefixes, and composes bundles component by component", async () => {
 		const registry = new BundleRegistry(join(dir, "registry"));
 		const base = await registry.importDirectory(BASE);
 		const demo = await registry.importDirectory(DEMO);
@@ -73,9 +73,10 @@ describe("bundle registry", () => {
 		expect(await registry.resolve("base")).toBe(base.digest);
 		expect(await registry.resolve(demo.digest.slice(7, 19))).toBe(demo.digest);
 		const objectFile = join(await registry.path(demo.digest), "prompt/attached.md");
-		await expect(writeFile(objectFile, "tamper")).rejects.toThrow();
+		// Published objects are read-only; root bypasses file permissions, so only check as a normal user.
+		if (process.getuid?.() !== 0) await expect(writeFile(objectFile, "tamper")).rejects.toThrow();
 
-		// Student view: A⁺ = (M, S) from demo, V = (P, U, F) from base.
+		// A composite bundle: M and S from demo, P, U and F from base.
 		const view = await registry.compose({ M: demo.digest, S: demo.digest, P: base.digest, U: base.digest, F: base.digest });
 		expect(view.componentDigests.S).toBe(demo.componentDigests.S);
 		expect(view.componentDigests.M).toBe(demo.componentDigests.M);

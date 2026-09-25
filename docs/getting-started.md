@@ -1,7 +1,5 @@
 # Getting started
 
-> Source preview: Lily has not been published to npm yet. Follow the [source setup in the README](../README.md#从源码开发) for now; the npm commands below describe the intended release installation.
-
 ## Install
 
 Lily needs **Node.js 22.19 or newer** (macOS or Linux).

@@ -74,6 +74,12 @@ Lily provides mechanisms only. Datasets, checks/rewards, bundle search, routing 
 - [x] Platform compatibility table and measured latencies ([environments.md](environments.md))
 - Not covered: x86-64 hosts, Apple container on macOS 15, SELinux-enforcing hosts, `limits.diskMb`
 
+### M12 — First release ✅
+- [x] Showcase README (banner, real TUI screenshot, links to site, docs, releases); the former README is now [GUIDE.zh-CN.md](../GUIDE.zh-CN.md); MIT `LICENSE`
+- [x] CI (`.github/workflows/ci.yml`: typecheck, Go tests, vitest, TUI pty test, package and site builds), tag-driven release (`release.yml`), GitHub Pages deployment (`pages.yml`) — D27
+- [x] Full suite run on Linux before release: fixed the locale warning in every command's output (D26)
+- [x] Closing the terminal or stopping the process destroys container/VM environments; lease teardown made single-flight (D25)
+
 ## Testing
 
 | Layer | How | Where |
@@ -89,4 +95,5 @@ Lily provides mechanisms only. Datasets, checks/rewards, bundle search, routing 
 | Isolation | Seatbelt, Apple container VMs, parameterized backend suite (skipped when unavailable) | `test/isolation` |
 | Units | Processor DSL, bundles/registry/render | `test/unit` |
 | TUI | Pseudo-terminal keystroke tests | `test/tui/` |
-| Package | `npm pack` → global install → `lily` from PATH | manual (see README) |
+| Signals | SIGHUP/SIGTERM during a run destroy the environment | `test/integration/signals.test.ts` |
+| Package | `npm pack --dry-run` in CI; `npm pack` → global install → `lily` from PATH | CI + manual |

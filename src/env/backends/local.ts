@@ -144,8 +144,10 @@ function guestEnvironment(paths: EnvironmentPaths, envId: string, extra?: Record
 		PATH: DEFAULT_PATH_DIRS.join(":"),
 		HOME: paths.home,
 		TMPDIR: paths.tmp,
-		LANG: "en_US.UTF-8",
-		LC_ALL: "en_US.UTF-8",
+		// C.UTF-8 exists on macOS and on glibc/musl Linux alike; en_US.UTF-8 is missing from
+		// most minimal Linux systems, where bash then warns on every command.
+		LANG: "C.UTF-8",
+		LC_ALL: "C.UTF-8",
 		TERM: "dumb",
 		SHELL: "/bin/bash",
 		USER: process.env.USER ?? "agent",

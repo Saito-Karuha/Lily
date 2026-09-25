@@ -8,5 +8,6 @@
   { "section": "Reference", "slug": "api", "title": "HTTP API", "file": "../docs/api.md" },
   { "section": "Reference", "slug": "bundle-format", "title": "Bundle format", "file": "../docs/bundle-format.md" },
   { "section": "Reference", "slug": "trajectory-format", "title": "Trajectory format", "file": "../docs/trajectory-format.md" },
-  { "section": "Reference", "slug": "envd-protocol", "title": "envd protocol", "file": "../docs/envd-protocol.md" }
+  { "section": "Reference", "slug": "envd-protocol", "title": "envd protocol", "file": "../docs/envd-protocol.md" },
+  { "section": "Reference", "slug": "decisions", "title": "Design decisions", "file": "../docs/decisions.md" }
 ]

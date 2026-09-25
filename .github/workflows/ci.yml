@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS minutes cost ten times as much as Linux ones on private repositories: run macOS on demand.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: envd/go.mod
+          cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Guest agent tests
+        working-directory: envd
+        run: go test ./...
+      - run: npm run build:envd
+      - run: npm test
+      - name: TUI in a pseudo-terminal
+        run: python3 test/tui/tui_smoke.py
+      - name: Package contents
+        run: npm pack --dry-run
+      - name: Release page builds
+        working-directory: site
+        run: |
+          npm ci
+          npm run build

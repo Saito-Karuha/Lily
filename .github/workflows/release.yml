@@ -1,0 +1,115 @@
+name: Release
+
+# Push a tag vX.Y.Z (matching package.json) to release:
+#   npm version patch && git push --follow-tags
+# The workflow tests the tag, builds the npm package and the lily-envd binaries, publishes to npm when
+# the NPM_TOKEN secret is set and the version is not on npm yet, and creates the GitHub release with
+# notes from CHANGELOG.md. A version already on npm (for example published by hand) is attached as the
+# exact tarball from the registry.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: envd/go.mod
+          cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Guest agent tests
+        working-directory: envd
+        run: go test ./...
+      - run: npm run build:envd
+      - run: npm test
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: envd/go.mod
+          cache: false
+      - run: npm ci
+
+      - name: Check the tag matches package.json
+        run: |
+          VERSION=$(node -p 'require("./package.json").version')
+          test "v$VERSION" = "$GITHUB_REF_NAME" || { echo "::error::tag $GITHUB_REF_NAME does not match package.json version $VERSION"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build the package and the guest agent binaries
+        run: |
+          mkdir -p out
+          npm pack --pack-destination out
+          for dir in dist/envd/*/; do
+            target=$(basename "$dir")
+            tar -czf "out/lily-envd-$VERSION-$target.tar.gz" -C "$dir" lily-envd
+          done
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLIC_REPO: ${{ !github.event.repository.private }}
+        run: |
+          if npm view "lily-harness@$VERSION" version >/dev/null 2>&1; then
+            echo "lily-harness@$VERSION is already on npm; attaching the registry tarball."
+            rm out/lily-harness-*.tgz
+            (cd out && npm pack "lily-harness@$VERSION")
+          elif [ -n "$NODE_AUTH_TOKEN" ]; then
+            flags="--access public"
+            # npm only issues provenance statements for public source repositories.
+            if [ "$PUBLIC_REPO" = "true" ]; then flags="$flags --provenance"; fi
+            npm publish "out/lily-harness-$VERSION.tgz" $flags
+          else
+            echo "::warning::NPM_TOKEN is not set and lily-harness@$VERSION is not on npm: skipping npm publish."
+          fi
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; if (index($0, "## " v " ") == 1 || $0 == "## " v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || echo "Lily $VERSION" > notes.md
+          { echo; echo "Install: \`npm install -g lily-harness@$VERSION\`"; } >> notes.md
+          (cd out && sha256sum * > SHA256SUMS)
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" out/* --title "Lily $VERSION" --notes-file notes.md --verify-tag
+          fi
+
+  pages:
+    needs: release
+    if: vars.PAGES_ENABLED == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

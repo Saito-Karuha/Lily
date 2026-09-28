@@ -6,7 +6,7 @@
 {
   "format": "lily.traj/v1",
   "exportedAt": 1758610000000,
-  "manifest": RunManifest,          // frozen conditions: kernel, model, bundle + component digests, prompt blocks, processor, environment, budget, labels, route
+  "manifest": RunManifest,          // frozen conditions: kernel, model and its effective configuration, bundle + component digests, prompt blocks, processor, environment (incl. root filesystem digest), budget, labels, route
   "outcome": RunOutcome,            // status, reason, turns, tool calls, usage, final text
   "annotations": { name: any },     // caller data attached to the run (lily annotate / PUT /api/runs/:id/annotations/:name), if any
   "fidelity": "semantic" | "request_exact" | "token_exact",   // lowest among policy turns (purpose "assistant")
@@ -25,6 +25,7 @@ Each `ExportedCall` is one real model request:
 | `model` | provider, model id, API |
 | `context` | the exact pi-ai `Context` sent: `systemPrompt`, `messages`, `tools` |
 | `response` | the settled assistant message (text, thinking, tool calls, usage, stop reason) |
+| `options` | the request options as recorded (sampling parameters, reasoning level, session id, …; no callbacks, signals or credentials) — with `context` they rebuild the payload ([below](#wire-payloads)) |
 | `payload` | provider-native request body (with `--payloads`) |
 | `tokens` | `{promptTokenIds, outputTokenIds}` when the engine returned them |
 | `fidelity` | `token_exact` (engine token ids) › `request_exact` (wire payload) › `semantic` |
@@ -57,3 +58,34 @@ A recorded call can be viewed under different resources without running anything
 - `options.systemPrefix` prepends text to the system prompt.
 
 `report` counts re-rendered observations and those kept as recorded (no raw archived, kernel-generated). Which blocks to swap, which processor to use and what prefix to add is entirely the caller's decision. For token-level use, tokenize the view's `context` with the policy's chat template and append the recorded `outputTokenIds` unchanged, so both contexts are evaluated on the same sampled output.
+
+## Wire payloads
+
+`renderCallPayload(models, model, context, options)` (SDK) builds the provider-native request body for a pi-ai context by running the provider's own request code — the same function that built the recorded `payload` — and stopping at its payload hook, before anything is sent. Given a call's recorded `context` and `options` it reproduces the recorded payload, which is how a consumer can check that the replay path matches the recording; given a view's context it gives the payload that context would have produced under the same conditions. `runtime.callPayload(runId, callId, context?)` and `POST /api/runs/:id/calls/:callId/payload` do this for stored runs and report `recordedPayloadMatches` and whether the model's configuration still matches the manifest's `model.configDigest`.
+
+## Projections
+
+A full export carries every call's whole context, so a long run moves O(turns²) messages. A projection selects what to export:
+
+- `purposes`: only calls with these purposes (e.g. `assistant`);
+- `fields`: only these per-call fields among `context`, `provenance`, `response`, `options`, `payload`, `tokens`, `usage` (identity and status fields — `callId`, `purpose`, `attempt`, `model`, times, `fidelity`, `stopReason`, `errorMessage` — are always present);
+- `tokenEncoding: "delta"`: prompt token ids prefix-encoded.
+
+SDK: `exportRunProjection(store, artifacts, {purposes, fields, tokenEncoding, includeRaw})`; HTTP: `GET /api/runs/:id/trajectory?purpose=assistant&fields=tokens,options&encoding=delta`. The document is a `lily.traj/v1` export with a `projection: {purposes?, fields, tokenEncoding}` member; `manifest`, `outcome`, `annotations`, `fidelity` and `tools` are as in a full export.
+
+With delta encoding, each call's `tokens.promptTokenIds` is `{base, prefix, tail}` instead of an array. The reference sequence is the previous call in `calls` that has tokens (`base` names it): its decoded prompt ids followed by its output ids. The prompt is the first `prefix` ids of the reference followed by `tail`. The first call with tokens has `base: null, prefix: 0`. Successive calls of an agent loop usually extend the previous prompt and output, so `tail` holds only the new tool result and template tokens. Decoding is a single pass in order:
+
+```python
+seqs = {}
+for call in doc["calls"]:
+    t = call.get("tokens")
+    if not t: continue
+    p = t["promptTokenIds"]
+    if isinstance(p, dict):
+        ref = seqs[p["base"]] if p["base"] else []
+        p = ref[:p["prefix"]] + p["tail"]
+    t["promptTokenIds"] = p
+    seqs[call["callId"]] = p + t["outputTokenIds"]
+```
+
+(`decodeTokenDeltas` in the SDK.)

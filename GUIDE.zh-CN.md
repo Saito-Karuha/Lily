@@ -45,7 +45,7 @@ TUI 里：直接输入并回车；agent 工作时再次输入即为插话（stee
 | `apple-container` | 虚拟机（每个环境独立 Linux 内核） | macOS 26+（15 有限制），Apple silicon | ✅ M4 / macOS 26.7 |
 | `docker` / `podman` | 容器（共享宿主内核） | Linux（cgroup v2）；macOS 上经 Docker Desktop 等 | ✅ Linux arm64 |
 | `gvisor` | 用户态内核 | Linux（docker/podman + runsc，不需要 KVM） | ✅ Linux arm64 |
-| `firecracker` | microVM | Linux + KVM | ✅ Linux arm64（嵌套虚拟化） |
+| `firecracker` | microVM（默认：共享只读镜像 + 每个 VM 私有的可写 overlay 盘） | Linux + KVM | ✅ Linux arm64（嵌套虚拟化） |
 
 ```bash
 lily env backends                                  # 查看本机可用的 backend
@@ -63,16 +63,19 @@ lily annotate <run> check '{"passed": true}'                                    
 lily bundle import ./my-bundle --ref v2 --parent base                                     # 派生资源包（来源信息自由格式）
 lily bundle compose --from base --part M=v2 --part S=v2 --ref mixed                      # 按组件组合
 lily --router ./my-router.mjs --bundle @router --label group=bugfix                      # 多个资源包共存，由外部 router 按 run 选择
-lily serve                                                                               # 本地 HTTP API（docs/api.md）
+lily serve --max-environments 64 --allow-root /data/tasks                                 # 本地 HTTP API（docs/api.md）
 ```
 
-TypeScript 下游直接用 SDK：`import { LilyRuntime, renderCallView } from "lily-harness"`。[examples/sdk/rollout.ts](examples/sdk/rollout.ts) 演示了下游如何只用公开接口实现并发 rollout、结果检查与注解（带测试）。接口说明见 [sdk.md](docs/sdk.md)。
+`lily serve` 让任意语言的程序以纯 HTTP 驱动批量隔离运行：创建会话时可以给出完整的环境规格（backend、镜像或 Firecracker 根文件系统、初态、limits、环境变量），容量用满时返回 503 `capacity_exhausted`；两次 run 之间可以上传/下载文件（不进入 run 记录）；可以用其他资源包查看某次调用的视图，并得到它的 wire payload；导出可以只取部分调用与字段，token id 用前缀增量编码。
+
+TypeScript 下游直接用 SDK：`import { LilyRuntime, renderCallView, renderCallPayload } from "lily-harness"`。[examples/sdk/rollout.ts](examples/sdk/rollout.ts) 演示了下游如何只用公开接口实现并发 rollout、结果检查与注解（带测试）。接口说明见 [sdk.md](docs/sdk.md)。
 
 与方法设计的对应关系（机制在 Lily，策略在下游）：
 
 - **固定内核 K**：工具 schema/描述/参数准备取自 Pi 0.85.1；系统提示词组装、压缩、会话、权限不在资源包中；资源包只含 `prompt/ tools/ skills/ memory/ observation/` 五个组件。
 - **run 内资源固定**：manifest 在第一次模型调用前写出（内核版本、模型、资源包及五个组件摘要、系统提示词分块、观测处理器、环境、预算、labels、路由决定）。
-- **o = F(z)**：工具先产生原始结果 z 并归档，再由 F（声明式 DSL）生成观测；默认 F 与 Pi 原生输出逐字节一致。`renderCallView()` 可以在不执行任何工具的前提下，用其他资源包的提示块与处理器重渲染某次调用的上下文（例如下游构造评分视图）。
+- **o = F(z)**：工具先产生原始结果 z 并归档，再由 F（声明式 DSL）生成观测；默认 F 与 Pi 原生输出逐字节一致。`renderCallView()` 可以在不执行任何工具的前提下，用其他资源包的提示块与处理器重渲染某次调用的上下文（例如下游构造评分视图）；`renderCallPayload()` 用 provider 自己的请求构造代码把任意上下文变成 wire payload 而不发送，用记录的上下文与请求参数能逐字段复现记录的 payload。
+- **运行条件可复现**：manifest 记录模型调用的有效配置（上下文窗口、最大输出、采样参数、compat、token 捕获方式，以及 baseUrl / headers 的摘要）与 Firecracker 根文件系统的摘要。
 - **多资源包共存**：注册表 + `@router` 钩子；如何路由、如何扩张/收缩资源包集合由下游 router 决定。
 - **结果未知不盲重跑**：工具执行前持久写 dispatched；重启后已完成的结果从账本取回，结果未知的 run 进入 `blocked`/`interrupted`。
 
@@ -144,5 +147,6 @@ docs/              文档
 
 - worker 重启后不会重新接管仍存活的容器/虚拟机环境，未完成的 run 记为 `interrupted`（D6）。
 - Seatbelt 档位下 agent 看到的是真实宿主路径；需要所有 agent 视图一致时请用虚拟机档位。
-- `token_exact` 依赖推理服务返回 token id（目前适配 vLLM）；商用 API 最高为 `request_exact`。
+- `token_exact` 依赖推理服务返回 token id（目前适配 vLLM 的返回字段）；商用 API 最高为 `request_exact`。
+- `limits.diskMb` 只在 Firecracker 的 overlay 模式下生效。
 - 各 backend 的实测状态见 [environments.md](docs/environments.md)。

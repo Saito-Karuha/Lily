@@ -53,6 +53,7 @@ registry/objects/<digest>/                   read-only bundle directories
 registry/records/<digest>.json               BundleRecord
 registry/refs.json
 envs/<envId>/env.json (+ state/)             environment records (working state for local/Seatbelt)
+cache/firecracker/                           shared resource drives and image digests (safe to delete)
 ```
 
 ## 4. Fixed kernel K and resource bundle R
@@ -83,9 +84,9 @@ Bundles are published by content digest, and runs only reference digests. A bund
 Lily provides mechanisms and no downstream policy. It has no dataset format, no evaluation or scoring, no bundle search or pool management, and no training-framework adapter. Downstream systems use generic interfaces and implement their policies themselves ([sdk.md](sdk.md)):
 
 - **Sessions and runs.** `batch` mode runs in a fresh environment (host directories are only copied), and labels and budgets are recorded per run.
-- **Environments.** `session.exec()` and `exportWorkspace()` let the caller inspect the environment after a run. Neither enters the model's context or the trajectory.
+- **Environments.** `session.exec()`, the file operations (`writeFile`, `readFile`, `upload`, `download`) and `exportWorkspace()` let the caller work in the environment between runs. None of it enters the model's context or the trajectory. Specs name the image or root filesystem, the initial state and limits; capacity is explicit and each environment reports its startup time and resource usage.
 - **Bundles.** A registry, component-wise composition, derived provenance with free-form data, and the `@router` hook.
-- **Records.** `lily.traj/v1` ([trajectory-format.md](trajectory-format.md)) holds per-call exact contexts, responses, token evidence and provenance, plus raw tool envelopes and run annotations. `renderCallView()` re-renders a recorded call under other resources without executing anything.
+- **Records.** `lily.traj/v1` ([trajectory-format.md](trajectory-format.md)) holds per-call exact contexts, request options, responses, token evidence and provenance, plus raw tool envelopes and run annotations; projections select calls and fields and delta-encode token ids. `renderCallView()` re-renders a recorded call under other resources without executing anything, and `renderCallPayload()` turns any such context into the wire payload the provider's own code would build.
 - **Entry points.** The TypeScript SDK, `lily -p --json`, and the HTTP API.
 
 `examples/sdk/rollout.ts` shows downstream code that uses only these interfaces to run tasks concurrently, check results and annotate runs.
@@ -95,3 +96,4 @@ Lily provides mechanisms and no downstream policy. It has no dataset format, no 
 - Tools execute in the control plane over envd primitives, not in a guest-side tool service (D2).
 - After a worker restart, surviving environments are not re-attached. Unfinished runs are recorded as interrupted (D6).
 - VM-level isolation comes from Apple `container` on macOS and Firecracker on Linux/KVM; both, and the container backends, pass the same acceptance suite (D11, D24).
+- Firecracker VMs share one read-only image per task environment and write to a private overlay disk instead of each copying the image (D28).

@@ -80,6 +80,17 @@ Lily provides mechanisms only. Datasets, checks/rewards, bundle search, routing 
 - [x] Full suite run on Linux before release: fixed the locale warning in every command's output (D26)
 - [x] Closing the terminal or stopping the process destroys container/VM environments; lease teardown made single-flight (D25)
 
+### M13 — 0.2: mechanisms for external orchestrators ✅
+- [x] Firecracker per-environment root filesystems (`spec.rootfs`, `firecracker.images`) with their digest in the manifest; overlay mode (shared read-only image + private scratch disk of `limits.diskMb`, `envd init --overlay`), `reflink` and `copy` modes — D28
+- [x] Resource drives packed once per bundle digest into a bounded shared cache — D29
+- [x] HTTP sessions from a full `EnvironmentSpec`, strict validation, `server.allowedRoots` / `--allow-root`, `prepare` — D30
+- [x] Capacity (`environment.maxConcurrent`, `lily serve` rejects with 503 `capacity_exhausted`, `/api/status`), `startupMs`, host-side CPU/memory usage per environment and per run, environment release — D31
+- [x] `renderCallPayload` (payload from the provider's own request code; reproduces every recorded payload), `runtime.callView/callPayload` and their HTTP endpoints, recorded request options in exports, effective model configuration in manifests — D32
+- [x] Export projections (purpose, fields) with prefix-delta token ids and `decodeTokenDeltas` — D33
+- [x] File transfer between runs (SDK + HTTP), `initialState: image`, `empty` clears image content — D34
+- [x] Provider `compat` passthrough (session affinity headers, chat template kwargs) — D35
+- [x] Acceptance on apple-container, docker, podman, gvisor, podman+gVisor and firecracker (overlay and copy modes, with and without the jailer), plus `test/isolation/firecracker-rootfs.test.ts`
+
 ## Testing
 
 | Layer | How | Where |
@@ -92,8 +103,11 @@ Lily provides mechanisms only. Datasets, checks/rewards, bundle search, routing 
 | Downstream example | `examples/sdk/rollout.ts` with router + checks + annotations | `test/integration/sdk-example.test.ts` |
 | Token capture | Fake vLLM SSE through pi-ai's OpenAI adapter | `test/integration/token-capture.test.ts` |
 | API | HTTP + SSE cursor, batch sessions, exec, workspace, annotations, compose, error codes, path hardening | `test/integration/server.test.ts` |
+| API: environments | full specs, validation, allowed roots, capacity and release, file transfer between runs | `test/integration/server-environments.test.ts` |
+| Replay | recorded payloads rebuilt exactly, views and payloads over SDK and HTTP, projections and token deltas, manifest model config, affinity headers | `test/integration/replay.test.ts` |
+| Firecracker images | per-environment rootfs and digests, overlay disk, creation time vs image size, reflink refusal, resource drive cache | `test/isolation/firecracker-rootfs.test.ts` |
 | Isolation | Seatbelt, Apple container VMs, parameterized backend suite (skipped when unavailable) | `test/isolation` |
-| Units | Processor DSL, bundles/registry/render | `test/unit` |
+| Units | Processor DSL, bundles/registry/render, derived-file cache and digests | `test/unit` |
 | TUI | Pseudo-terminal keystroke tests | `test/tui/` |
 | Signals | SIGHUP/SIGTERM during a run destroy the environment | `test/integration/signals.test.ts` |
 | Package | `npm pack --dry-run` in CI; `npm pack` → global install → `lily` from PATH | CI + manual |

@@ -12,13 +12,14 @@ Lily reads `~/.lily/config.json` (`$LILY_HOME/config.json`). `lily config` print
   "environment": {
     "backend": "seatbelt",                    // local | seatbelt | apple-container | docker | podman | gvisor | firecracker
     "image": "python:3.12-slim",              // image for container/VM backends
-    "limits": { "cpus": 2, "memoryMb": 2048, "pids": 512, "network": "none" },   // network: none | egress
+    "limits": { "cpus": 2, "memoryMb": 2048, "pids": 512, "network": "none" },   // network: none | egress; diskMb (Firecracker)
+    "maxConcurrent": 16,                      // environments one Lily process may hold at once
     "seatbeltReadPaths": ["/opt/homebrew"],   // extra host paths the Seatbelt sandbox may read
-    "firecracker": { "kernel": "…/vmlinux", "rootfs": "…/rootfs.ext4" }   // enables the Firecracker backend
+    "firecracker": { "kernel": "…/vmlinux", "rootfs": "…/rootfs.ext4" }   // enables the Firecracker backend (below)
   },
   "compaction": { "enabled": true, "reserveTokens": 16384, "keepRecentTokens": 20000 },
   "allowAmbientCredentials": false,           // let providers use host credential files (gcloud ADC, AWS profiles)
-  "server": { "port": 7777, "host": "127.0.0.1" }
+  "server": { "port": 7777, "host": "127.0.0.1", "allowedRoots": ["/data/tasks"] }   // allowedRoots: host paths the HTTP API may read
 }
 ```
 
@@ -52,8 +53,27 @@ Any OpenAI-compatible server works as a custom provider:
 | `baseUrl` | the endpoint |
 | `apiKeyEnv` | environment variable holding the key (omit for keyless local servers) |
 | `headers` | extra request headers |
-| `models[]` | `{id, name?, contextWindow?, maxTokens?, reasoning?, input?: ["text","image"], samplingParams?}` |
+| `compat` | pi-ai compatibility settings for every model of the provider, e.g. for `openai-completions`: `sendSessionAffinityHeaders` (send the session key as `x-session-affinity`, for engines and routers that keep a session on one replica or cache), `chatTemplateKwargs` (such as `{"enable_thinking": false}`), `supportsDeveloperRole`, `maxTokensField` |
+| `models[]` | `{id, name?, contextWindow?, maxTokens?, reasoning?, input?: ["text","image"], samplingParams?, compat?}` — a model's `compat` keys override the provider's |
 | `tokenCapture: "vllm"` | ask vLLM (≥ 0.10.2) for prompt and sampled token ids (`return_token_ids`), so recorded calls are `token_exact` |
+
+Everything here that shapes requests — the model's limits, sampling parameters, `compat`, the token capture mode, and digests of `baseUrl` and `headers` — is recorded in every run manifest (`manifest.model`, with a `configDigest`), so runs made under different settings can be told apart. The session key a request carries is `<session id>:main`.
+
+## Firecracker
+
+`environment.firecracker` enables the backend on Linux with KVM ([environments.md](environments.md#firecracker-root-filesystems), [scripts/firecracker/README.md](../scripts/firecracker/README.md)):
+
+| key | |
+|---|---|
+| `kernel` | uncompressed guest kernel (required) |
+| `rootfs` | default root filesystem |
+| `images` | `{name: rootfs path}`: a spec's `image` picks one |
+| `rootfsMode` | `overlay` (default), `reflink` or `copy` |
+| `diskMb` | writable space of an overlay VM when the spec has no `limits.diskMb` (default 4096) |
+| `vcpus`, `memoryMb` | defaults when the spec has no limits (2, 2048) |
+| `jailer`, `uid`, `gid` | run every VM under Firecracker's jailer as that user (Lily must run as root) |
+| `cacheDir`, `resourceCacheMb` | shared resource drives and image digests (default `~/.lily/cache/firecracker`, 1024 MiB) |
+| `firecracker`, `mkfs`, `vsockPort`, `bootTimeoutMs` | binaries and protocol details |
 
 ## Resource bundles
 
@@ -70,4 +90,5 @@ Any OpenAI-compatible server works as a custom provider:
   artifacts/       content-addressed blobs (contexts, responses, raw tool outputs)
   registry/        resource bundles (immutable) and refs
   envs/            environment records (and working state of local/Seatbelt environments)
+  cache/           derived files that can be deleted at any time (Firecracker resource drives, image digests)
 ```

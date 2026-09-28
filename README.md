@@ -45,7 +45,7 @@ Self-hosted models (vLLM, SGLang or any other OpenAI-compatible server) take one
 - **Isolation you choose.** Tools run through a small guest agent, never in your shell. You pick the environment: a macOS sandbox, Docker or Podman, gVisor, an Apple container VM, or a Firecracker microVM. Your API keys never enter it.
 - **Runs you can reproduce.** The prompt, memory, skills and tool guidance that shape the agent live in immutable, content-addressed resource bundles, pinned before each run starts.
 - **Records you can trust.** Every model call is captured at the provider boundary, including token ids when the model is served by vLLM. Every tool output is recorded before it is formatted. Any run can be exported as a trajectory.
-- **Built to be driven.** There is a TypeScript SDK, `lily -p --json` event streams, a local HTTP API, and a router hook that lets many bundles coexist.
+- **Built to be driven.** There is a TypeScript SDK, `lily -p --json` event streams, a local HTTP API with explicit capacity and full environment specs, and a router hook that lets many bundles coexist. Recorded calls can be re-rendered under other resources, down to the exact request payload.
 
 ## Isolation backends
 

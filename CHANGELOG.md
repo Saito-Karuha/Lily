@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 — 2026-09-28
+
+Mechanisms for programs that drive many isolated runs — schedulers, evaluators, trainers — over the HTTP API or the SDK.
+
+**Environments**
+- Firecracker environments choose their root filesystem: `rootfs` in the spec, or an `image` name mapped by `firecracker.images`. The environment info (and every run manifest) records the image's path, size and sha256 digest.
+- Firecracker VMs no longer copy their image. By default (`rootfsMode: "overlay"`) every VM attaches the image read-only and writes to its own sparse disk of `limits.diskMb` (default 4096 MiB), stacked with overlayfs by `lily-envd init --overlay`; creation time no longer depends on the image size, and `limits.diskMb` is enforced. `rootfsMode: "reflink"` keeps a reflink copy per VM and fails clearly where reflinks are unavailable; `"copy"` is the previous behaviour. The guest kernel needs overlayfs, and root filesystems must be rebuilt with this release's `lily-envd`.
+- Resource bundles are packed into Firecracker drives once per bundle digest and shared by all VMs (`cacheDir`, `resourceCacheMb`).
+- `initialState: {kind: "image"}` keeps what an image ships at `/workspace`. **Behaviour change:** every other initial state now starts from exactly its own content; `empty` used to show whatever the image had at `/workspace`.
+- Capacity: `environment.maxConcurrent` (default 16). `lily serve --max-environments N` answers 503 `capacity_exhausted` when all slots are in use instead of holding the request; `/api/status` reports `capacity`.
+- Each environment records `startupMs`; container and VM backends report CPU time and peak memory (`lease.usage()`, measured from the host for Firecracker, docker, podman and gVisor), and run outcomes carry `environmentUsage`.
+- `session.releaseEnvironment()` frees an environment between runs; the next run starts a fresh one.
+- Files between runs, for the caller and never recorded: `session.writeFile`, `readFile`, `upload`, `download`.
+- Specification and backend errors are reported as `invalid_environment` / `backend_unavailable`.
+
+**HTTP API**
+- `POST /api/sessions` accepts a full `environment` spec (backend, image, rootfs, initial state, limits, env, label) and `prepare: true` (provision now; the session is deleted if that fails).
+- `--allow-root <dir>` / `server.allowedRoots` confine the host paths requests may name (403 `forbidden_path`).
+- New endpoints: `GET|POST|DELETE /api/sessions/:id/environment`, `PUT|GET /api/sessions/:id/files`, `POST /api/sessions/:id/upload`, `GET /api/sessions/:id/download`, `POST /api/runs/:id/calls/:callId/view`, `POST /api/runs/:id/calls/:callId/payload`.
+- `GET /api/runs/:id/trajectory?purpose=…&fields=…&encoding=delta` exports projections.
+- Environment-side errors (a missing file) are 4xx, not 500.
+
+**Records and replay**
+- `renderCallPayload()` builds the provider-native payload for any context with the provider's own request code, without sending it; it reproduces every recorded payload. `runtime.callPayload()` / `runtime.callView()` replay stored calls, with bundles named by ref.
+- Exports include each call's recorded request `options`. `exportRunProjection()` selects calls and fields and prefix-encodes token ids; `decodeTokenDeltas()` restores them.
+- Run manifests record the model's effective configuration: context window, max tokens, sampling parameters, compat, token capture mode, digests of the base URL and headers, and a `configDigest` over all of it.
+
+**Models**
+- Custom providers accept pi-ai `compat` settings (provider-wide and per model), for example `sendSessionAffinityHeaders` or `chatTemplateKwargs`.
+
 ## 0.1.2 — 2026-09-25
 
 **Fixes**

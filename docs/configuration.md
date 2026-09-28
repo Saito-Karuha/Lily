@@ -53,7 +53,7 @@ Any OpenAI-compatible server works as a custom provider:
 | `baseUrl` | the endpoint |
 | `apiKeyEnv` | environment variable holding the key (omit for keyless local servers) |
 | `headers` | extra request headers |
-| `compat` | pi-ai compatibility settings for every model of the provider, e.g. for `openai-completions`: `sendSessionAffinityHeaders` (send the session key as `x-session-affinity`, for engines and routers that keep a session on one replica or cache), `chatTemplateKwargs` (such as `{"enable_thinking": false}`), `supportsDeveloperRole`, `maxTokensField` |
+| `compat` | pi-ai compatibility settings for every model of the provider, e.g. for `openai-completions`: `sendSessionAffinityHeaders` (send the session key as `x-session-affinity`, for engines and routers that keep a session on one replica or cache), `thinkingFormat` (for a model with `reasoning: true`: `"qwen-chat-template"` sends `chat_template_kwargs: {enable_thinking, preserve_thinking: true}` from the thinking level; `"chat-template"` sends the `chatTemplateKwargs` you give), `supportsDeveloperRole`, `maxTokensField` |
 | `models[]` | `{id, name?, contextWindow?, maxTokens?, reasoning?, input?: ["text","image"], samplingParams?, compat?}` — a model's `compat` keys override the provider's |
 | `tokenCapture: "vllm"` | ask vLLM (≥ 0.10.2) for prompt and sampled token ids (`return_token_ids`), so recorded calls are `token_exact` |
 

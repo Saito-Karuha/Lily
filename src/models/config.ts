@@ -12,6 +12,12 @@ export interface CustomProviderConfig {
 	/** Environment variable holding the API key; omit for keyless local servers. */
 	apiKeyEnv?: string;
 	headers?: Record<string, string>;
+	/**
+	 * pi-ai compatibility settings for every model of this provider (e.g. for openai-completions
+	 * `sendSessionAffinityHeaders`, `chatTemplateKwargs`, `supportsDeveloperRole`); a model's own
+	 * `compat` keys override these.
+	 */
+	compat?: Record<string, unknown>;
 	models: Array<{
 		id: string;
 		name?: string;
@@ -20,6 +26,7 @@ export interface CustomProviderConfig {
 		reasoning?: boolean;
 		input?: Array<"text" | "image">;
 		samplingParams?: Record<string, unknown>;
+		compat?: Record<string, unknown>;
 	}>;
 	/** Ask the engine for sampled token ids so exports can be token_exact. */
 	tokenCapture?: "vllm";
@@ -38,6 +45,8 @@ export interface LilyConfig {
 		backend?: string;
 		image?: string;
 		limits?: EnvironmentLimits;
+		/** Environments that may exist at once in one Lily process (default 16). */
+		maxConcurrent?: number;
 		/** Extra host paths the Seatbelt backend may read. */
 		seatbeltReadPaths?: string[];
 		/** Enables the Firecracker backend (Linux + KVM); see scripts/firecracker/README.md. */
@@ -46,7 +55,15 @@ export interface LilyConfig {
 	compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number };
 	/** Allow provider auth to use ambient host credential files (gcloud ADC, AWS profiles). Default false. */
 	allowAmbientCredentials?: boolean;
-	server?: { port?: number; host?: string };
+	server?: {
+		port?: number;
+		host?: string;
+		/**
+		 * Host directories the HTTP API may read host paths from (workspaces, initial states, root
+		 * filesystems, bundle imports). Unset: any path is accepted.
+		 */
+		allowedRoots?: string[];
+	};
 }
 
 export async function loadConfig(home: LilyHome): Promise<LilyConfig> {

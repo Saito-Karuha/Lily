@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { EnvdError } from "../env/envd-client.ts";
 import { LilyError } from "../util/errors.ts";
 
 export type Params = Record<string, string>;
@@ -8,7 +9,10 @@ export interface RequestContext {
 	res: ServerResponse;
 	params: Params;
 	query: URLSearchParams;
+	/** The JSON body (at most 8 MiB). */
 	body: () => Promise<unknown>;
+	/** The raw body as bytes (at most `maxBytes`, default 512 MiB), for binary uploads. */
+	rawBody: (maxBytes?: number) => Promise<Buffer>;
 }
 
 export type Handler = (ctx: RequestContext) => Promise<unknown> | unknown;
@@ -33,6 +37,7 @@ export class HttpError extends Error {
 }
 
 const MAX_BODY = 8 * 1024 * 1024;
+const MAX_RAW_BODY = 512 * 1024 * 1024;
 
 /** Minimal JSON router: `:name` segments and a trailing `*` wildcard (as `params.rest`). */
 export class Router {
@@ -100,30 +105,36 @@ export class Router {
 	}
 }
 
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readRaw(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
 	return new Promise((resolveBody, reject) => {
 		const chunks: Buffer[] = [];
 		let size = 0;
 		req.on("data", (chunk: Buffer) => {
 			size += chunk.byteLength;
-			if (size > MAX_BODY) {
+			if (size > maxBytes) {
 				reject(new HttpError(413, "Request body too large"));
 				req.destroy();
 				return;
 			}
 			chunks.push(chunk);
 		});
-		req.on("end", () => {
-			if (chunks.length === 0) return resolveBody({});
-			try {
-				resolveBody(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-			} catch {
-				reject(new HttpError(400, "Invalid JSON body"));
-			}
-		});
+		req.on("end", () => resolveBody(Buffer.concat(chunks)));
 		req.on("error", reject);
 	});
 }
+
+async function readBody(req: IncomingMessage): Promise<unknown> {
+	const data = await readRaw(req, MAX_BODY);
+	if (data.byteLength === 0) return {};
+	try {
+		return JSON.parse(data.toString("utf8"));
+	} catch {
+		throw new HttpError(400, "Invalid JSON body");
+	}
+}
+
+/** HTTP status for a LilyError code (default 400). */
+const STATUS_BY_CODE: Record<string, number> = { not_found: 404, forbidden_path: 403, capacity_exhausted: 503 };
 
 export function sendJson(res: ServerResponse, status: number, value: unknown): void {
 	const body = JSON.stringify(value);
@@ -150,7 +161,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
 			if (url.pathname.startsWith("/api/")) {
 				const match = options.router.match(req.method ?? "GET", url.pathname);
 				if (!match) throw new HttpError(404, `No route for ${req.method} ${url.pathname}`);
-				const result = await match.handler({ req, res, params: match.params, query: url.searchParams, body: () => readBody(req) });
+				const result = await match.handler({
+					req,
+					res,
+					params: match.params,
+					query: url.searchParams,
+					body: () => readBody(req),
+					rawBody: (maxBytes = MAX_RAW_BODY) => readRaw(req, maxBytes),
+				});
 				if (result === HANDLED) return;
 				sendJson(res, 200, result ?? { ok: true });
 				return;
@@ -161,9 +179,22 @@ export function createHttpServer(options: HttpServerOptions): Server {
 				res.end();
 				return;
 			}
-			const status = error instanceof HttpError ? error.status : error instanceof LilyError ? (error.code === "not_found" ? 404 : 400) : 500;
-			const code = error instanceof LilyError ? error.code : status === 404 ? "not_found" : status === 500 ? "internal" : "bad_request";
-			sendJson(res, status, { error: { code, message: error instanceof Error ? error.message : String(error) } });
+			// Errors from the environment's envd (a missing file, a denied path) are the request's fault, not the server's.
+			const envd = error instanceof EnvdError ? error.code : undefined;
+			const status =
+				error instanceof HttpError
+					? error.status
+					: error instanceof LilyError
+						? (STATUS_BY_CODE[error.code] ?? 400)
+						: envd
+							? (STATUS_BY_CODE[envd] ?? (envd === "too_large" ? 413 : 400))
+							: 500;
+			const code =
+				error instanceof LilyError
+					? error.code
+					: (envd ?? (status === 404 ? "not_found" : status === 413 ? "too_large" : status === 500 ? "internal" : "bad_request"));
+			const details = error instanceof LilyError && error.details !== undefined ? { details: error.details } : {};
+			sendJson(res, status, { error: { code, message: error instanceof Error ? error.message : String(error), ...details } });
 		}
 	});
 }

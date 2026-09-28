@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { cp, mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { LilyError } from "../../util/errors.ts";
 import { exists } from "../../util/fsx.ts";
 import { makeTreeReadOnly, removeTree } from "../../util/tree.ts";
 import { EnvdClient } from "../envd-client.ts";
@@ -75,6 +76,7 @@ export class LocalBackend implements EnvironmentBackend {
 	}
 
 	async create(envId: string, spec: EnvironmentSpec, stateDir: string): Promise<BackendInstance> {
+		if (spec.initialState.kind === "image") throw new LilyError("invalid_environment", `The ${this.name} backend has no image: initialState "image" needs a container or VM backend`);
 		await mkdir(stateDir, { recursive: true });
 		const root = await realpath(stateDir);
 		const mount = spec.initialState.kind === "mount" ? await realpath(spec.initialState.path) : undefined;

@@ -87,6 +87,7 @@ export function vllmTokenCapture(providerIds: Iterable<string>): TokenCaptureFac
 			return new Response(forClient, { status: response.status, statusText: response.statusText, headers: response.headers });
 		};
 		return {
+			mode: "vllm",
 			fetch: capturingFetch,
 			patchOptions: (options) => ({ ...options, samplingParams: { ...options.samplingParams, return_token_ids: true } }),
 			evidence: async () => {

@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT, JsonlSessionRepo, type JsonlSessionMetadata } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import type { MutableModels } from "@earendil-works/pi-ai";
+import type { Context as AiContext, MutableModels } from "@earendil-works/pi-ai";
 import { ContainerBackend } from "../env/backends/container.ts";
 import { FirecrackerBackend } from "../env/backends/firecracker.ts";
 import { LocalBackend } from "../env/backends/local.ts";
@@ -16,6 +16,14 @@ import { BundleRegistry } from "../resources/registry.ts";
 import { type BundleRouter, loadRouter } from "../resources/router.ts";
 import { ArtifactStore } from "../store/artifacts.ts";
 import { LilyHome } from "../store/home.ts";
+import {
+	type CallPayloadResult,
+	type CallViewRequest,
+	type CallViewResult,
+	type ReplayServices,
+	renderRecordedCallPayload,
+	viewRecordedCall,
+} from "../trajectory/replay.ts";
 import { LilyError } from "../util/errors.ts";
 import type { SessionBinding } from "./binding.ts";
 import { LilySession, readBinding, type RuntimeServices, type SessionInit } from "./session.ts";
@@ -28,7 +36,10 @@ export interface RuntimeOptions {
 	/** Replace the model registry (tests inject faux providers). */
 	models?: MutableModels;
 	backends?: EnvironmentBackend[];
+	/** Environments that may exist at once (default: `config.environment.maxConcurrent`, else 16). */
 	maxConcurrentEnvironments?: number;
+	/** When that many exist, wait for one to end (default) or fail with `capacity_exhausted` (what `lily serve` does). */
+	whenEnvironmentsFull?: "wait" | "reject";
 	tokenCapture?: TokenCaptureFactory;
 	/** Bundle router for sessions bound to `@router` (default: the module named by `config.router`, if any). */
 	router?: BundleRouter;
@@ -79,8 +90,11 @@ export class LilyRuntime {
 		this.tokenCapture = options.tokenCapture ?? (captureProviders.length ? vllmTokenCapture(captureProviders) : undefined);
 		this.artifacts = new ArtifactStore(home.artifacts);
 		this.registry = new BundleRegistry(home.registry);
-		this.envs = new EnvironmentManager(home, { maxConcurrent: options.maxConcurrentEnvironments ?? 16 });
-		const backends = options.backends ?? defaultBackends(config);
+		this.envs = new EnvironmentManager(home, {
+			maxConcurrent: options.maxConcurrentEnvironments ?? config.environment?.maxConcurrent ?? 16,
+			whenFull: options.whenEnvironmentsFull ?? "wait",
+		});
+		const backends = options.backends ?? defaultBackends(config, home);
 		for (const backend of backends) this.envs.register(backend);
 		this.repo = new JsonlSessionRepo({ fileSystem: new NodeExecutionEnv({ cwd: home.root }), sessionsRoot: home.sessions });
 		this.router = options.router;
@@ -110,6 +124,29 @@ export class LilyRuntime {
 			get router() {
 				return runtime.router;
 			},
+		};
+	}
+
+	/**
+	 * The wire payload of a recorded call's context — or of `context`, e.g. a view — under the call's
+	 * recorded request options, built by the provider's own request code without sending anything.
+	 */
+	callPayload(runId: string, callId: string, context?: AiContext): Promise<CallPayloadResult> {
+		return renderRecordedCallPayload(this.#replay, runId, callId, context);
+	}
+
+	/** A recorded call re-rendered under other resources (`renderCallView` with bundles named by ref), and optionally its payload. */
+	callView(runId: string, callId: string, request?: CallViewRequest): Promise<CallViewResult> {
+		return viewRecordedCall(this.#replay, runId, callId, request);
+	}
+
+	get #replay(): ReplayServices {
+		return {
+			home: this.home,
+			artifacts: this.artifacts,
+			registry: this.registry,
+			models: this.models,
+			...(this.tokenCapture ? { tokenCapture: this.tokenCapture } : {}),
 		};
 	}
 
@@ -258,10 +295,12 @@ export class LilyRuntime {
 	}
 }
 
-export function defaultBackends(config: LilyConfig): EnvironmentBackend[] {
+/** The backends Lily knows, configured from `config.environment`; `home` gives them a cache directory. */
+export function defaultBackends(config: LilyConfig, home?: LilyHome): EnvironmentBackend[] {
 	const extraReadPaths = config.environment?.seatbeltReadPaths ?? [];
 	const defaultImage = config.environment?.image;
-	const firecracker = config.environment?.firecracker;
+	const configured = config.environment?.firecracker;
+	const firecracker = configured && home && !configured.cacheDir ? { ...configured, cacheDir: join(home.cache, "firecracker") } : configured;
 	return [
 		new LocalBackend(),
 		new LocalBackend({ seatbelt: true, extraReadPaths }),

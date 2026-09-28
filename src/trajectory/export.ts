@@ -47,6 +47,8 @@ export interface ExportedCall {
 	context: AiContext;
 	provenance: CallProvenance;
 	response: unknown;
+	/** Request options as recorded (no callbacks, signals or credentials): what `renderCallPayload` needs to rebuild the payload. */
+	options?: Record<string, unknown>;
 	payload?: unknown;
 	tokens?: { promptTokenIds: number[]; outputTokenIds: number[] };
 }
@@ -67,6 +69,41 @@ export interface ExportedTrajectory {
 export interface ExportOptions {
 	includePayloads?: boolean;
 	includeRaw?: boolean;
+}
+
+/** Per-call fields a projection can select; identity and status fields are always present. */
+export type CallField = "context" | "provenance" | "response" | "options" | "payload" | "tokens" | "usage";
+export const CALL_FIELDS: readonly CallField[] = ["context", "provenance", "response", "options", "payload", "tokens", "usage"];
+
+export interface ProjectionOptions {
+	/** Only calls with these purposes (default: all). */
+	purposes?: ModelCallRecord["purpose"][];
+	/** Only these per-call fields (default: all of them). */
+	fields?: CallField[];
+	/** "delta" prefix-encodes each call's prompt token ids against the previous exported call's tokens. */
+	tokenEncoding?: "full" | "delta";
+	includeRaw?: boolean;
+}
+
+/**
+ * Prompt token ids as a delta: the first `prefix` ids are those of the reference sequence, the
+ * previous call in `calls` that carries tokens (`base`) — its decoded prompt ids followed by its
+ * output ids — and `tail` follows them. The first call with tokens has `base: null, prefix: 0`.
+ */
+export interface TokenDelta {
+	base: string | null;
+	prefix: number;
+	tail: number[];
+}
+
+export type ProjectedCall = Pick<ExportedCall, "callId" | "purpose" | "attempt" | "model" | "startedAt" | "endedAt" | "fidelity" | "stopReason" | "errorMessage"> &
+	Partial<Pick<ExportedCall, "context" | "provenance" | "response" | "options" | "payload" | "usage">> & {
+		tokens?: { promptTokenIds: number[] | TokenDelta; outputTokenIds: number[] };
+	};
+
+export interface ProjectedTrajectory extends Omit<ExportedTrajectory, "calls"> {
+	projection: { purposes?: ModelCallRecord["purpose"][]; fields: CallField[]; tokenEncoding: "full" | "delta" };
+	calls: ProjectedCall[];
 }
 
 const FIDELITY_ORDER: Fidelity[] = ["semantic", "request_exact", "token_exact"];
@@ -118,6 +155,54 @@ export function blockSpans(blocks: PromptBlock[]): CallProvenance["systemBlocks"
 	});
 }
 
+/** Lowest fidelity among policy turns (calls with purpose "assistant"). */
+function runFidelity(records: ModelCallRecord[]): Fidelity {
+	const turns = records.filter((c) => c.purpose === "assistant").map((c) => FIDELITY_ORDER.indexOf(c.fidelity));
+	return FIDELITY_ORDER[turns.length ? Math.min(...turns) : 0]!;
+}
+
+async function buildCall(record: ModelCallRecord, manifest: RunManifest, artifacts: ArtifactStore, fields: ReadonlySet<CallField>): Promise<ProjectedCall> {
+	const call: ProjectedCall = {
+		callId: record.callId,
+		purpose: record.purpose,
+		attempt: record.attempt,
+		model: record.model,
+		startedAt: record.startedAt,
+		endedAt: record.endedAt,
+		fidelity: record.fidelity,
+		stopReason: record.stopReason,
+		...(record.errorMessage ? { errorMessage: record.errorMessage } : {}),
+	};
+	if (fields.has("usage") && record.usage) call.usage = record.usage;
+	if (fields.has("context") || fields.has("provenance")) {
+		const context = await loadContext(artifacts, record.contextRef);
+		if (fields.has("context")) call.context = context;
+		if (fields.has("provenance")) {
+			const matches = context.systemPrompt === manifest.systemPrompt.blocks.map((b) => b.text).join(PROMPT_BLOCK_SEPARATOR);
+			call.provenance = {
+				systemPromptMatchesManifest: matches,
+				systemBlocks: matches ? blockSpans(manifest.systemPrompt.blocks) : [],
+				messages: messageProvenance(context.messages),
+			};
+		}
+	}
+	if (fields.has("response")) call.response = await artifacts.getJson(record.responseRef);
+	if (fields.has("options") && record.optionsRef) call.options = await artifacts.getJson<Record<string, unknown>>(record.optionsRef);
+	if (fields.has("payload") && record.payloadRef) call.payload = await artifacts.getJson(record.payloadRef);
+	if (fields.has("tokens") && record.tokens) {
+		call.tokens = {
+			promptTokenIds: await artifacts.getJson<number[]>(record.tokens.promptTokenIdsRef),
+			outputTokenIds: await artifacts.getJson<number[]>(record.tokens.outputTokenIdsRef),
+		};
+	}
+	return call;
+}
+
+async function exportTools(store: RunStore, artifacts: ArtifactStore, includeRaw: boolean): Promise<Array<ToolCallRecord & { raw?: unknown }>> {
+	const records = await store.tools.readAll();
+	return Promise.all(records.map(async (tool) => (includeRaw ? { ...tool, raw: await artifacts.getJson(tool.rawRef) } : tool)));
+}
+
 /**
  * Builds the call-level export of one run. Every call carries the context the
  * model actually received (not a reconstruction from the final transcript),
@@ -128,55 +213,95 @@ export async function exportRun(store: RunStore, artifacts: ArtifactStore, optio
 	const outcome = await store.readOutcome();
 	const annotations = await store.readAnnotations();
 	const records = await store.calls.readAll();
-	const toolRecords = await store.tools.readAll();
-	const assembled = manifest.systemPrompt.blocks.map((b) => b.text).join(PROMPT_BLOCK_SEPARATOR);
+	const fields = new Set(CALL_FIELDS.filter((f) => f !== "payload" || options.includePayloads));
 	const calls: ExportedCall[] = [];
-	for (const record of records) {
-		const context = await loadContext(artifacts, record.contextRef);
-		const response = await artifacts.getJson(record.responseRef);
-		const matches = context.systemPrompt === assembled;
-		calls.push({
-			callId: record.callId,
-			purpose: record.purpose,
-			attempt: record.attempt,
-			model: record.model,
-			startedAt: record.startedAt,
-			endedAt: record.endedAt,
-			fidelity: record.fidelity,
-			stopReason: record.stopReason,
-			...(record.errorMessage ? { errorMessage: record.errorMessage } : {}),
-			...(record.usage ? { usage: record.usage } : {}),
-			context,
-			provenance: {
-				systemPromptMatchesManifest: matches,
-				systemBlocks: matches ? blockSpans(manifest.systemPrompt.blocks) : [],
-				messages: messageProvenance(context.messages),
-			},
-			response,
-			...(options.includePayloads && record.payloadRef ? { payload: await artifacts.getJson(record.payloadRef) } : {}),
-			...(record.tokens
-				? {
-						tokens: {
-							promptTokenIds: await artifacts.getJson<number[]>(record.tokens.promptTokenIdsRef),
-							outputTokenIds: await artifacts.getJson<number[]>(record.tokens.outputTokenIdsRef),
-						},
-					}
-				: {}),
-		});
-	}
-	const tools = await Promise.all(
-		toolRecords.map(async (tool) => (options.includeRaw ? { ...tool, raw: await artifacts.getJson(tool.rawRef) } : tool)),
-	);
-	const turnFidelities = calls.filter((c) => c.purpose === "assistant").map((c) => FIDELITY_ORDER.indexOf(c.fidelity));
-	const fidelity = FIDELITY_ORDER[turnFidelities.length ? Math.min(...turnFidelities) : 0]!;
+	for (const record of records) calls.push((await buildCall(record, manifest, artifacts, fields)) as ExportedCall);
 	return {
 		format: TRAJECTORY_FORMAT,
 		exportedAt: Date.now(),
 		manifest,
 		...(outcome ? { outcome } : {}),
 		...(Object.keys(annotations).length ? { annotations } : {}),
-		fidelity,
+		fidelity: runFidelity(records),
 		calls,
-		tools,
+		tools: await exportTools(store, artifacts, Boolean(options.includeRaw)),
 	};
+}
+
+/**
+ * A projection of a run's export: only some calls, only some per-call fields, and optionally
+ * token ids prefix-encoded (successive calls of an agent loop share most of their prompt), so a
+ * consumer that needs, say, only the token ids of policy turns does not move every context.
+ * `decodeTokenDeltas` restores the full arrays.
+ */
+export async function exportRunProjection(store: RunStore, artifacts: ArtifactStore, projection: ProjectionOptions = {}): Promise<ProjectedTrajectory> {
+	const manifest = await store.readManifest();
+	const outcome = await store.readOutcome();
+	const annotations = await store.readAnnotations();
+	const records = await store.calls.readAll();
+	const selected = projection.fields ? CALL_FIELDS.filter((f) => projection.fields!.includes(f)) : [...CALL_FIELDS];
+	const fields = new Set(selected);
+	const encoding = projection.tokenEncoding ?? "full";
+	const calls: ProjectedCall[] = [];
+	let reference: { callId: string; ids: number[] } | undefined;
+	for (const record of records) {
+		if (projection.purposes && !projection.purposes.includes(record.purpose)) continue;
+		const call = await buildCall(record, manifest, artifacts, fields);
+		if (call.tokens) {
+			const prompt = call.tokens.promptTokenIds as number[];
+			const full = [...prompt, ...call.tokens.outputTokenIds];
+			if (encoding === "delta") {
+				const prefix = reference ? commonPrefix(reference.ids, prompt) : 0;
+				call.tokens.promptTokenIds = { base: reference?.callId ?? null, prefix, tail: prompt.slice(prefix) };
+			}
+			reference = { callId: call.callId, ids: full };
+		}
+		calls.push(call);
+	}
+	return {
+		format: TRAJECTORY_FORMAT,
+		exportedAt: Date.now(),
+		manifest,
+		...(outcome ? { outcome } : {}),
+		...(Object.keys(annotations).length ? { annotations } : {}),
+		fidelity: runFidelity(records),
+		projection: { ...(projection.purposes ? { purposes: projection.purposes } : {}), fields: selected, tokenEncoding: encoding },
+		calls,
+		tools: await exportTools(store, artifacts, Boolean(projection.includeRaw)),
+	};
+}
+
+/** Replaces every `TokenDelta` of a projection by the full token id array it encodes. */
+export function decodeTokenDeltas(trajectory: ProjectedTrajectory): ProjectedTrajectory {
+	const sequences = new Map<string, number[]>();
+	const calls = trajectory.calls.map((call) => {
+		if (!call.tokens) return call;
+		const encoded = call.tokens.promptTokenIds;
+		let prompt: number[];
+		if (Array.isArray(encoded)) prompt = encoded;
+		else {
+			const base = encoded.base === null ? [] : sequences.get(encoded.base);
+			if (!base) throw new Error(`call ${call.callId}: unknown token base ${encoded.base}`);
+			if (encoded.prefix > base.length) throw new Error(`call ${call.callId}: prefix ${encoded.prefix} exceeds its base`);
+			prompt = [...base.slice(0, encoded.prefix), ...encoded.tail];
+		}
+		sequences.set(call.callId, [...prompt, ...call.tokens.outputTokenIds]);
+		return { ...call, tokens: { promptTokenIds: prompt, outputTokenIds: call.tokens.outputTokenIds } };
+	});
+	return { ...trajectory, projection: { ...trajectory.projection, tokenEncoding: "full" }, calls };
+}
+
+function commonPrefix(a: number[], b: number[]): number {
+	const n = Math.min(a.length, b.length);
+	let i = 0;
+	while (i < n && a[i] === b[i]) i++;
+	return i;
+}
+
+/** One recorded call of a run, as in `exportRun` (payload included when recorded). */
+export async function exportCall(store: RunStore, artifacts: ArtifactStore, callId: string): Promise<{ manifest: RunManifest; call: ExportedCall } | undefined> {
+	const record = (await store.calls.readAll()).find((c) => c.callId === callId);
+	if (!record) return undefined;
+	const manifest = await store.readManifest();
+	return { manifest, call: (await buildCall(record, manifest, artifacts, new Set(CALL_FIELDS))) as ExportedCall };
 }

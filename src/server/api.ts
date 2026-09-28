@@ -4,10 +4,11 @@ import { COMPONENTS, type Component } from "../resources/bundle.ts";
 import type { LilyRuntime } from "../runtime/runtime.ts";
 import { readBinding } from "../runtime/session.ts";
 import { listRunIds, RunStore } from "../store/runs.ts";
-import { exportRun } from "../trajectory/export.ts";
+import { exportRun, exportRunProjection } from "../trajectory/export.ts";
 import { renderTrajectoryMarkdown } from "../trajectory/render-md.ts";
 import { PACKAGE_VERSION } from "../util/package.ts";
 import { HANDLED, HttpError, Router } from "./http.ts";
+import { HostPaths, isObject, parseEnvironment, parseProjection, parseViewRequest } from "./validate.ts";
 
 export const LILY_VERSION = PACKAGE_VERSION;
 
@@ -102,13 +103,25 @@ async function streamEvents(runtime: LilyRuntime, sessionId: string, after: numb
 	});
 }
 
+export interface ApiOptions {
+	/** Host directories requests may name paths in (default: `config.server.allowedRoots`; none = unrestricted). */
+	allowedRoots?: string[];
+}
+
+function sendBinary(ctx: { res: ServerResponse }, type: string, data: Buffer, filename?: string): typeof HANDLED {
+	ctx.res.writeHead(200, { "content-type": type, "content-length": data.byteLength, ...(filename ? { "content-disposition": `attachment; filename="${filename}"` } : {}) });
+	ctx.res.end(data);
+	return HANDLED;
+}
+
 /**
  * Lily's language-neutral control surface: sessions and runs, their event
  * streams, recorded trajectories, environments and resource bundles. It carries
  * no knowledge of datasets, rewards or training — callers build those on top.
  */
-export function createApi(runtime: LilyRuntime): Router {
+export function createApi(runtime: LilyRuntime, options: ApiOptions = {}): Router {
 	const router = new Router();
+	const paths = new HostPaths(options.allowedRoots ?? runtime.config.server?.allowedRoots);
 
 	router.get("/api/status", async () => ({
 		version: LILY_VERSION,
@@ -118,6 +131,7 @@ export function createApi(runtime: LilyRuntime): Router {
 		router: runtime.router?.name ?? null,
 		openSessions: runtime.openSessions().length,
 		liveEnvironments: runtime.envs.live().length,
+		capacity: { environments: runtime.envs.capacity() },
 	}));
 
 	router.get("/api/models", async (ctx) => {
@@ -126,11 +140,14 @@ export function createApi(runtime: LilyRuntime): Router {
 		return models.map((m) => ({ provider: m.provider, id: m.id, name: m.name, api: m.api, contextWindow: m.contextWindow, reasoning: m.reasoning }));
 	});
 
-	router.get("/api/environments", async () => ({
+	router.get("/api/environments", async (ctx) => ({
 		backends: await Promise.all(
 			runtime.envs.backends().map(async (b) => ({ name: b.name, isolation: b.isolation, ...(await b.probe()) })),
 		),
-		live: runtime.envs.live().map((lease) => lease.info),
+		live: await Promise.all(
+			runtime.envs.live().map(async (lease) => (ctx.query.get("usage") === "1" ? { ...lease.info, usage: (await lease.usage()) ?? null } : lease.info)),
+		),
+		capacity: runtime.envs.capacity(),
 	}));
 
 	// Sessions
@@ -142,6 +159,7 @@ export function createApi(runtime: LilyRuntime): Router {
 	router.post("/api/sessions", async (ctx) => {
 		const body = (await ctx.body()) as {
 			workspace?: string;
+			environment?: unknown;
 			mode?: "interactive" | "batch";
 			model?: string;
 			bundle?: string | null;
@@ -149,16 +167,28 @@ export function createApi(runtime: LilyRuntime): Router {
 			title?: string;
 			labels?: unknown;
 			budget?: unknown;
+			prepare?: unknown;
 		};
 		const mode = body.mode ?? "interactive";
 		if (mode !== "interactive" && mode !== "batch") throw new HttpError(400, `mode must be "interactive" or "batch"`);
-		const workspace = body.workspace ? resolve(body.workspace) : undefined;
-		// interactive: the host directory is the workspace (mounted where the backend can);
-		// batch: a fresh environment starts from a copy of it (or empty), the host is never written.
-		const environment =
-			mode === "interactive"
-				? runtime.defaultEnvironment(requireString(workspace, "workspace"), body.backend)
-				: runtime.isolatedEnvironment(workspace ? { kind: "directory", path: workspace } : { kind: "empty" }, body.backend);
+		let environment;
+		let workspaceLabel: string | undefined;
+		if (body.environment !== undefined) {
+			if (body.workspace !== undefined || body.backend !== undefined) throw new HttpError(400, "give either environment or workspace/backend, not both");
+			environment = await parseEnvironment(body.environment, paths, (initial, backend) => runtime.isolatedEnvironment(initial, backend));
+			const state = environment.initialState;
+			if ("path" in state) workspaceLabel = state.path;
+		} else {
+			const workspace = body.workspace !== undefined ? await paths.check(body.workspace, "workspace", "directory") : undefined;
+			workspaceLabel = workspace;
+			// interactive: the host directory is the workspace (mounted where the backend can);
+			// batch: a fresh environment starts from a copy of it (or empty), the host is never written.
+			environment =
+				mode === "interactive"
+					? runtime.defaultEnvironment(requireString(workspace, "workspace (or environment)"), body.backend)
+					: runtime.isolatedEnvironment(workspace ? { kind: "directory", path: workspace } : { kind: "empty" }, body.backend);
+		}
+		if (body.prepare !== undefined && typeof body.prepare !== "boolean") throw new HttpError(400, "prepare must be a boolean");
 		const labels = optionalLabels(body.labels);
 		const budget = optionalBudget(body.budget);
 		const session = await runtime.createSession({
@@ -167,12 +197,21 @@ export function createApi(runtime: LilyRuntime): Router {
 			// An explicit null means "no bundle"; only a missing field falls back to the default.
 			bundle: body.bundle !== undefined ? body.bundle : (runtime.config.bundle ?? null),
 			environment,
-			...(workspace ? { workspaceLabel: workspace } : {}),
+			...(workspaceLabel ? { workspaceLabel } : {}),
 			...(body.title ? { title: body.title } : {}),
 			...(labels ? { labels } : {}),
 			...(budget ? { budget } : {}),
 		});
-		return { sessionId: session.id, binding: session.binding };
+		if (body.prepare) {
+			try {
+				await session.prepare();
+			} catch (error) {
+				// Creating a session that cannot get its environment fails as a whole.
+				await runtime.deleteSession(session.id).catch(() => {});
+				throw error;
+			}
+		}
+		return { sessionId: session.id, binding: session.binding, ...(body.prepare ? { environment: session.lease?.info ?? null } : {}) };
 	});
 
 	router.get("/api/sessions/:id", async (ctx) => {
@@ -266,10 +305,52 @@ export function createApi(runtime: LilyRuntime): Router {
 
 	router.get("/api/sessions/:id/workspace", async (ctx) => {
 		const session = await runtime.openSession(ctx.params.id!);
-		const archive = await session.exportWorkspace();
-		ctx.res.writeHead(200, { "content-type": "application/gzip", "content-disposition": `attachment; filename="workspace-${session.id}.tgz"` });
-		ctx.res.end(archive);
-		return HANDLED;
+		return sendBinary(ctx, "application/gzip", await session.exportWorkspace(), `workspace-${session.id}.tgz`);
+	});
+
+	router.get("/api/sessions/:id/environment", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		const lease = session.lease;
+		if (!lease) throw new HttpError(404, "The session has no live environment");
+		return { info: lease.info, usage: (await lease.usage()) ?? null };
+	});
+
+	router.post("/api/sessions/:id/environment", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		const lease = await session.prepare();
+		return { info: lease?.info ?? null };
+	});
+
+	router.delete("/api/sessions/:id/environment", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		return { released: await session.releaseEnvironment() };
+	});
+
+	// Files in a session's environment, between runs (never seen by the model, never recorded).
+	router.put("/api/sessions/:id/files", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		const mode = ctx.query.get("mode");
+		if (mode !== null && !/^[0-7]{3,4}$/.test(mode)) throw new HttpError(400, "mode must be octal, e.g. 755");
+		return session.writeFile(requireString(ctx.query.get("path"), "path"), await ctx.rawBody(), mode !== null ? { mode: Number.parseInt(mode, 8) } : {});
+	});
+
+	router.get("/api/sessions/:id/files", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		const file = await session.readFile(requireString(ctx.query.get("path"), "path"), { maxBytes: 512 * 1024 * 1024 });
+		if (!file.complete) throw new HttpError(413, `${file.path} is larger than 512 MiB; download its directory instead`);
+		return sendBinary(ctx, "application/octet-stream", file.data);
+	});
+
+	router.post("/api/sessions/:id/upload", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		const archive = await ctx.rawBody();
+		const root = ctx.query.get("root");
+		return session.upload(archive, root !== null ? { root } : {});
+	});
+
+	router.get("/api/sessions/:id/download", async (ctx) => {
+		const session = await runtime.openSession(ctx.params.id!);
+		return sendBinary(ctx, "application/gzip", await session.download(ctx.query.get("path") ?? undefined));
 	});
 
 	router.get("/api/sessions/:id/runs", async (ctx) => {
@@ -293,7 +374,27 @@ export function createApi(runtime: LilyRuntime): Router {
 
 	router.get("/api/runs/:id/trajectory", async (ctx) => {
 		const store = await existingRun(runtime, ctx.params.id!);
-		return exportRun(store, runtime.artifacts, { includeRaw: ctx.query.get("raw") === "1", includePayloads: ctx.query.get("payloads") === "1" });
+		const includeRaw = ctx.query.get("raw") === "1";
+		const projection = parseProjection(ctx.query);
+		if (projection) return exportRunProjection(store, runtime.artifacts, { ...projection, includeRaw });
+		return exportRun(store, runtime.artifacts, { includeRaw, includePayloads: ctx.query.get("payloads") === "1" });
+	});
+
+	router.post("/api/runs/:id/calls/:callId/view", async (ctx) => {
+		await existingRun(runtime, ctx.params.id!);
+		return runtime.callView(ctx.params.id!, ctx.params.callId!, parseViewRequest(await ctx.body()));
+	});
+
+	router.post("/api/runs/:id/calls/:callId/payload", async (ctx) => {
+		await existingRun(runtime, ctx.params.id!);
+		const body = await ctx.body();
+		if (!isObject(body)) throw new HttpError(400, "body must be an object");
+		const extra = Object.keys(body).filter((k) => k !== "context");
+		if (extra.length) throw new HttpError(400, `unknown field ${extra.join(", ")} (known: context)`);
+		if (body.context !== undefined && (!isObject(body.context) || !Array.isArray(body.context.messages))) {
+			throw new HttpError(400, "context must be a pi-ai Context: {systemPrompt?, messages, tools?}");
+		}
+		return runtime.callPayload(ctx.params.id!, ctx.params.callId!, body.context as never);
 	});
 
 	router.get("/api/runs/:id/markdown", async (ctx) => {
@@ -327,7 +428,7 @@ export function createApi(runtime: LilyRuntime): Router {
 
 	router.post("/api/bundles/import", async (ctx) => {
 		const body = (await ctx.body()) as { path?: string; ref?: string; parents?: string[]; data?: Record<string, unknown> };
-		const dir = resolve(requireString(body.path, "path"));
+		const dir = paths.restricted ? await paths.check(body.path, "path", "directory") : resolve(requireString(body.path, "path"));
 		const parents = await Promise.all((body.parents ?? []).map((p) => runtime.registry.resolve(p)));
 		const record = await runtime.registry.importDirectory(
 			dir,

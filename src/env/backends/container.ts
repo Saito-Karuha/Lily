@@ -3,7 +3,8 @@ import { promisify } from "node:util";
 import { Semaphore } from "../../util/async.ts";
 import { EnvdClient } from "../envd-client.ts";
 import { envdBinary, type GuestArch, hostTarget } from "../envd-binary.ts";
-import type { BackendInstance, EnvironmentBackend, EnvironmentPaths, EnvironmentSpec, IsolationLevel } from "../types.ts";
+import type { BackendInstance, EnvironmentBackend, EnvironmentPaths, EnvironmentSpec, EnvironmentUsage, IsolationLevel } from "../types.ts";
+import { guestCgroupUsage, hostCgroupDir, hostCgroupUsage } from "../usage.ts";
 
 const run = promisify(execFile);
 
@@ -227,14 +228,36 @@ export class ContainerBackend implements EnvironmentBackend {
 			await this.#destroy(name, child, client);
 			throw error;
 		}
+		let cgroup: Promise<string | undefined> | undefined;
 		return {
 			paths: GUEST_PATHS,
 			client,
 			details: { container: name, image, cli: this.#binary, runtime: this.#options.runtime ?? null, guestArch: host.arch },
 			resourcesMounted: Boolean(spec.resourcesDir),
 			workspaceProvided: spec.initialState.kind === "mount",
+			usage: async (): Promise<EnvironmentUsage | undefined> => {
+				cgroup ??= this.#hostCgroup(name);
+				const dir = await cgroup;
+				return (dir ? await hostCgroupUsage(dir) : undefined) ?? guestCgroupUsage(client);
+			},
 			destroy: () => this.#destroy(name, child, client),
 		};
+	}
+
+	/**
+	 * The container's cgroup on this host, when the engine runs here (Linux): usage measured there
+	 * covers everything the runtime does for the container (gVisor's sentry included) and cannot be
+	 * influenced from inside. Undefined elsewhere (Apple's VMs, a remote engine).
+	 */
+	async #hostCgroup(name: string): Promise<string | undefined> {
+		if (process.platform !== "linux" || this.#options.dialect === "apple") return undefined;
+		try {
+			const { stdout } = await this.#cli(["inspect", "--format", "{{.State.Pid}}", name], 30_000);
+			const pid = Number(stdout.trim());
+			return pid > 0 ? await hostCgroupDir(pid) : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/**

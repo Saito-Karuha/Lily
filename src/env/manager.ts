@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import { LilyError } from "../util/errors.ts";
 import { removeTree } from "../util/tree.ts";
 import type { LilyHome } from "../store/home.ts";
 import { Semaphore } from "../util/async.ts";
@@ -15,6 +16,7 @@ import type {
 	EnvironmentInfo,
 	EnvironmentLease,
 	EnvironmentSpec,
+	EnvironmentUsage,
 } from "./types.ts";
 
 export type EnvironmentStatus = "provisioning" | "ready" | "destroyed" | "lost" | "failed";
@@ -31,7 +33,26 @@ export interface EnvironmentRecord {
 }
 
 export interface EnvironmentManagerOptions {
+	/** Environments that may exist at once (live or being provisioned). Default 16. */
 	maxConcurrent?: number;
+	/**
+	 * What `provision()` does when `maxConcurrent` environments exist: wait for one to end (default),
+	 * or fail at once with a `capacity_exhausted` error — for servers whose callers schedule work themselves.
+	 */
+	whenFull?: "wait" | "reject";
+}
+
+export interface EnvironmentCapacity {
+	max: number;
+	/** Live environments. */
+	live: number;
+	/** Environments being provisioned right now. */
+	provisioning: number;
+	/** Environments that can still be created without waiting. */
+	free: number;
+	/** Callers waiting for a free slot (only with `whenFull: "wait"`). */
+	waiting: number;
+	whenFull: "wait" | "reject";
 }
 
 /**
@@ -44,10 +65,26 @@ export class EnvironmentManager {
 	readonly #backends = new Map<string, EnvironmentBackend>();
 	readonly #leases = new Map<string, Lease>();
 	readonly #slots: Semaphore;
+	readonly #max: number;
+	readonly #whenFull: "wait" | "reject";
+	#provisioning = 0;
 
 	constructor(home: LilyHome, options: EnvironmentManagerOptions = {}) {
 		this.#home = home;
-		this.#slots = new Semaphore(options.maxConcurrent ?? 16);
+		this.#max = options.maxConcurrent ?? 16;
+		this.#whenFull = options.whenFull ?? "wait";
+		this.#slots = new Semaphore(this.#max);
+	}
+
+	capacity(): EnvironmentCapacity {
+		return {
+			max: this.#max,
+			live: this.#leases.size,
+			provisioning: this.#provisioning,
+			free: this.#slots.available,
+			waiting: this.#slots.waiting,
+			whenFull: this.#whenFull,
+		};
 	}
 
 	register(backend: EnvironmentBackend): void {
@@ -60,7 +97,7 @@ export class EnvironmentManager {
 
 	backend(name: string): EnvironmentBackend {
 		const backend = this.#backends.get(name);
-		if (!backend) throw new Error(`Unknown environment backend: ${name} (known: ${[...this.#backends.keys()].join(", ")})`);
+		if (!backend) throw new LilyError("invalid_environment", `Unknown environment backend: ${name} (known: ${[...this.#backends.keys()].join(", ")})`);
 		return backend;
 	}
 
@@ -75,8 +112,15 @@ export class EnvironmentManager {
 	async provision(spec: EnvironmentSpec): Promise<EnvironmentLease> {
 		const backend = this.backend(spec.backend);
 		const probe = await backend.probe();
-		if (!probe.available) throw new Error(`Backend ${backend.name} unavailable: ${probe.reason}`);
-		const release = await this.#slots.acquire();
+		if (!probe.available) throw new LilyError("backend_unavailable", `Backend ${backend.name} unavailable: ${probe.reason}`);
+		const release = this.#whenFull === "reject" ? this.#slots.tryAcquire() : await this.#slots.acquire();
+		if (!release) {
+			throw new LilyError("capacity_exhausted", `All ${this.#max} environment slots are in use; try again when an environment has been released`, {
+				capacity: this.capacity(),
+			});
+		}
+		const started = Date.now();
+		this.#provisioning++;
 		const envId = newId("env");
 		const stateDir = this.#home.env(envId);
 		const recordPath = join(stateDir, "env.json");
@@ -100,8 +144,10 @@ export class EnvironmentManager {
 				isolation: backend.isolation,
 				paths: instance.paths,
 				image: spec.image,
+				...(instance.rootfs ? { rootfs: instance.rootfs } : {}),
 				label: spec.label,
 				createdAt: Date.now(),
+				startupMs: Date.now() - started,
 				guest: { os: guest.os, arch: guest.arch, hostname: guest.hostname, uid: guest.uid, envdVersion: guest.version },
 				details: instance.details,
 				limits: spec.limits ?? {},
@@ -114,9 +160,11 @@ export class EnvironmentManager {
 			});
 			this.#leases.set(envId, lease);
 			await writeJsonAtomic(recordPath, { ...record, status: "ready", info, updatedAt: Date.now() });
+			this.#provisioning--;
 			void instance.client.whenClosed().then(() => lease.markLost());
 			return lease;
 		} catch (error) {
+			this.#provisioning--;
 			release();
 			await instance?.destroy().catch(() => {});
 			await writeJsonAtomic(recordPath, {
@@ -132,14 +180,23 @@ export class EnvironmentManager {
 	async #initialize(instance: BackendInstance, spec: EnvironmentSpec): Promise<void> {
 		const { client, paths } = instance;
 		await client.request("fs.mkdir", { path: paths.workspace, recursive: true });
-		if (!instance.workspaceProvided) {
+		if (!instance.workspaceProvided && spec.initialState.kind !== "image") {
+			// Only `image` keeps what an image ships at the workspace path; every other state starts from nothing.
+			const { entries } = await client.request("fs.list", { path: paths.workspace });
+			for (const entry of entries) {
+				try {
+					await client.request("fs.remove", { path: posix.join(paths.workspace, entry.name), recursive: true, force: true });
+				} catch (error) {
+					throw new Error(`The image's ${paths.workspace} is not empty and could not be cleared (${(error as Error).message}); use initialState {kind: "image"} to keep it`);
+				}
+			}
 			const state = spec.initialState;
 			if (state.kind === "directory") {
 				await client.upload(paths.workspace, await packDirectory(state.path, { exclude: state.exclude }));
 			} else if (state.kind === "archive") {
 				await client.upload(paths.workspace, await readFile(state.path));
 			} else if (state.kind === "mount") {
-				throw new Error(`Backend does not support mounted workspaces`);
+				throw new LilyError("invalid_environment", `Backend does not support mounted workspaces`);
 			}
 		}
 		if (spec.resourcesDir && !instance.resourcesMounted) {
@@ -228,6 +285,11 @@ class Lease implements EnvironmentLease {
 
 	exportWorkspace(): Promise<Buffer> {
 		return this.#instance.client.download(this.info.paths.workspace);
+	}
+
+	async usage(): Promise<EnvironmentUsage | undefined> {
+		if (this.#ended || !this.#instance.usage) return undefined;
+		return this.#instance.usage().catch(() => undefined);
 	}
 
 	destroy(): Promise<void> {

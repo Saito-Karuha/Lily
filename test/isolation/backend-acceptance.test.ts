@@ -22,7 +22,7 @@ import { tempDir } from "../helpers/env.ts";
  * The suite is skipped when the variable is unset or the backend's probe() fails.
  * Optional: LILY_TEST_IMAGE (image for container backends), LILY_TEST_EGRESS (host:port reachable
  * from an egress environment, "0" to skip), and for firecracker LILY_FC_KERNEL, LILY_FC_ROOTFS,
- * LILY_FC_BIN, LILY_FC_JAILER. scripts/verify/ sets up a Linux VM that has docker, podman and gVisor.
+ * LILY_FC_BIN, LILY_FC_JAILER, LILY_FC_ROOTFS_MODE. scripts/verify/ sets up a Linux VM that has docker, podman and gVisor.
  */
 
 const run = promisify(execFile);
@@ -46,15 +46,35 @@ interface Traits {
 	oomKillsEnvironment?: boolean;
 	/** The same backend configured to run commands as UID/GID 1000. */
 	nonRoot?: () => EnvironmentBackend;
+	/** Where resource usage is measured ("host": the VMM process or the container's cgroup). */
+	usage: "host" | "guest";
+	/** Spec fields for an image whose /workspace holds baked.txt ("baked\n"), when the test can build one. */
+	bake?: () => Promise<Partial<EnvironmentSpec>>;
 	/** Kills the environment's container/VM from outside, as a crash would. */
 	kill(lease: EnvironmentLease): Promise<void>;
 	/** Names of backend objects (containers, VM processes) still present for these env ids. */
 	leftovers(envIds: string[]): Promise<string[]>;
 }
 
-function containerTraits(backend: ContainerBackend, traits: Omit<Traits, "kill" | "leftovers" | "nonRoot">, cli: string, options: ContainerBackendOptions): Traits {
+function containerTraits(backend: ContainerBackend, traits: Omit<Traits, "kill" | "leftovers" | "nonRoot" | "usage" | "bake">, cli: string, options: ContainerBackendOptions): Traits {
+	const apple = options.dialect === "apple";
 	return {
 		...traits,
+		usage: apple ? "guest" : "host",
+		...(apple
+			? {}
+			: {
+					bake: async () => {
+						// An image with content at /workspace: the defaultImage plus one committed file.
+						const name = `lily-bake-${process.pid}`;
+						const image = `localhost/lily-test-baked:${process.pid}`;
+						await run(cli, ["rm", "-f", name], { timeout: 60_000 }).catch(() => {});
+						await run(cli, ["run", "--name", name, "--entrypoint", "sh", options.defaultImage!, "-c", "mkdir -p /workspace && echo baked > /workspace/baked.txt"], { timeout: 300_000 });
+						await run(cli, ["commit", name, image], { timeout: 300_000 });
+						await run(cli, ["rm", "-f", name], { timeout: 60_000 });
+						return { image };
+					},
+				}),
 		nonRoot: () => new ContainerBackend({ ...options, user: "1000:1000", name: `${backend.name}-nonroot` }),
 		kill: async (lease) => {
 			await run(cli, ["kill", String(lease.info.details.container)], { timeout: 60_000 });
@@ -101,6 +121,7 @@ function underTest(name: string): { backend: EnvironmentBackend; traits: Traits 
 				rootfs,
 				...(process.env.LILY_FC_BIN ? { firecracker: process.env.LILY_FC_BIN } : {}),
 				...(process.env.LILY_FC_JAILER ? { jailer: process.env.LILY_FC_JAILER } : {}),
+				...(process.env.LILY_FC_ROOTFS_MODE ? { rootfsMode: process.env.LILY_FC_ROOTFS_MODE as "overlay" | "reflink" | "copy" } : {}),
 			});
 			return {
 				backend,
@@ -111,6 +132,17 @@ function underTest(name: string): { backend: EnvironmentBackend; traits: Traits 
 					egress: false,
 					pids: true,
 					nproc: 2,
+					usage: "host",
+					bake: async () => {
+						// A copy of the root filesystem with a file in /workspace, written with debugfs.
+						const dir = await tempDir();
+						const image = join(dir, "baked.ext4");
+						await writeFile(join(dir, "baked.txt"), "baked\n");
+						await writeFile(join(dir, "cmds"), `cd /workspace\nwrite ${join(dir, "baked.txt")} baked.txt\n`);
+						await run("cp", ["--sparse=always", rootfs, image]);
+						await run("debugfs", ["-w", "-f", join(dir, "cmds"), image]);
+						return { rootfs: image };
+					},
 					kill: async (lease) => {
 						process.kill(Number(lease.info.details.pid), "SIGKILL");
 					},
@@ -198,6 +230,35 @@ describe.skipIf(!probe.available)(`backend acceptance: ${BACKEND}`, () => {
 		if (created.length) expect(await traits.leftovers(created)).toEqual([]);
 		console.log(`[backend-acceptance] ${BACKEND} timings (ms): ${JSON.stringify(timings)}`);
 	}, 300_000);
+
+	it("measures its startup time and the resources it uses", async () => {
+		expect(a.info.startupMs).toBeGreaterThan(0);
+		const before = await a.usage();
+		await sh(a, `python3 -c "
+import time
+x = bytearray(96 * 1024 * 1024)
+t = time.time()
+while time.time() - t < 0.5: pass
+print(len(x))"`);
+		const after = await a.usage();
+		timings.usage = JSON.stringify({ before, after });
+		expect(after?.source).toBe(traits.usage);
+		expect(after!.cpuMs!).toBeGreaterThan((before?.cpuMs ?? 0) + 300);
+		expect(after!.memoryPeakBytes!).toBeGreaterThan(96 * 1024 * 1024);
+	}, 120_000);
+
+	it("keeps what the image has at /workspace only with initialState image", async () => {
+		if (!traits.bake) return;
+		const baked = await traits.bake();
+		const kept = await provision({ ...baked, initialState: { kind: "image" } });
+		const cleared = await provision({ ...baked, initialState: { kind: "empty" } });
+		try {
+			expect((await sh(kept, "cat baked.txt")).out).toBe("baked\n");
+			expect((await sh(cleared, "ls -A /workspace | wc -l")).out.trim()).toBe("0");
+		} finally {
+			await Promise.all([kept.destroy(), cleared.destroy()]);
+		}
+	}, 600_000);
 
 	it("reports its isolation level and the fixed guest layout", () => {
 		expect(a.info.backend).toBe(backend.name);

@@ -8,7 +8,7 @@ import { registerScriptedProvider } from "../models/registry.ts";
 import { COMPONENT_DIRS, COMPONENTS, type Component } from "../resources/bundle.ts";
 import { renderResources } from "../resources/render.ts";
 import { loadRouter, ROUTED_BUNDLE } from "../resources/router.ts";
-import { LilyRuntime } from "../runtime/runtime.ts";
+import { LilyRuntime, type RuntimeOptions } from "../runtime/runtime.ts";
 import type { LilySession } from "../runtime/session.ts";
 import { createApi, LILY_VERSION } from "../server/api.ts";
 import { createHttpServer } from "../server/http.ts";
@@ -43,7 +43,8 @@ ${c.bold("Commands")}
   env [backends] | sweep            execution environments
   doctor                            check the installation (node, models, bundles, backends)
   models [--all]                    list models
-  serve [--port 7777] [--host h]    local HTTP API (see docs/api.md)
+  serve [--port 7777] [--host h] [--max-environments N] [--allow-root dir]…
+                                    local HTTP API (see docs/api.md)
   config [key [value]]              read or change ~/.lily/config.json
 
 ${c.bold("Options")}
@@ -78,12 +79,12 @@ function scriptPath(script: string): string {
 	return script === "demo" && !existsSync(resolve(script)) ? join(packageRoot(), "examples", "scripts", "chat.json") : resolve(script);
 }
 
-async function makeRuntime(options: GlobalOptions): Promise<LilyRuntime> {
+async function makeRuntime(options: GlobalOptions, extra: Pick<RuntimeOptions, "maxConcurrentEnvironments" | "whenEnvironmentsFull"> = {}): Promise<LilyRuntime> {
 	const config = await loadConfig(new LilyHome(options.home));
 	// With --script the scripted model is the default everywhere (CLI, API) for this process only.
 	if (options.script) config.model = SCRIPT_MODEL;
 	const router = options.router ? await loadRouter(options.router) : undefined;
-	const runtime = await LilyRuntime.create({ ...(options.home ? { home: options.home } : {}), config, ...(router ? { router } : {}) });
+	const runtime = await LilyRuntime.create({ ...(options.home ? { home: options.home } : {}), config, ...(router ? { router } : {}), ...extra });
 	if (options.script) await registerScriptedProvider(runtime.models, "script", scriptPath(options.script));
 	return runtime;
 }
@@ -314,6 +315,8 @@ export async function main(argv: string[]): Promise<void> {
 			json: { type: "boolean" },
 			port: { type: "string" },
 			host: { type: "string" },
+			"max-environments": { type: "string" },
+			"allow-root": { type: "string", multiple: true },
 			all: { type: "boolean" },
 		},
 	});
@@ -481,11 +484,15 @@ export async function main(argv: string[]): Promise<void> {
 			return;
 		}
 		case "serve": {
-			const runtime = await makeRuntime(options);
+			const max = values["max-environments"];
+			if (max !== undefined && !(Number.isInteger(Number(max)) && Number(max) > 0)) fail("--max-environments expects a positive integer");
+			// A server answers "capacity_exhausted" instead of holding requests until an environment ends.
+			const runtime = await makeRuntime(options, { whenEnvironmentsFull: "reject", ...(max !== undefined ? { maxConcurrentEnvironments: Number(max) } : {}) });
 			const port = Number(values.port ?? runtime.config.server?.port ?? 7777);
 			const host = typeof values.host === "string" ? values.host : (runtime.config.server?.host ?? "127.0.0.1");
+			const roots = (values["allow-root"] ?? []).filter((r): r is string => typeof r === "string");
 			const server = createHttpServer({
-				router: createApi(runtime),
+				router: createApi(runtime, roots.length ? { allowedRoots: roots.map((r) => resolve(r)) } : {}),
 				allowedHosts: host === "127.0.0.1" || host === "localhost" ? ["127.0.0.1", "localhost", "[::1]"] : undefined,
 			});
 			server.listen(port, host, () =>

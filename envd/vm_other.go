@@ -9,6 +9,8 @@ var errLinuxOnly = errors.New("only supported on linux")
 // vmSetup is only meaningful when envd is a Linux VM's init.
 func vmSetup() error { return errors.New("--vm is only supported on linux") }
 
+func overlayRoot(string) error { return errLinuxOnly }
+
 func mountReadOnly(string, string) error { return errLinuxOnly }
 
 func bindReadOnly(string) error { return errLinuxOnly }

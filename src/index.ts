@@ -14,7 +14,7 @@ export type { LilyEvent } from "./runtime/events.ts";
 export { LILY_VERSION } from "./server/api.ts";
 
 // Execution environments
-export { EnvironmentManager } from "./env/manager.ts";
+export { EnvironmentManager, type EnvironmentCapacity, type EnvironmentManagerOptions } from "./env/manager.ts";
 export { LocalBackend, type LocalBackendOptions } from "./env/backends/local.ts";
 export { ContainerBackend, GUEST_PATHS, type ContainerBackendOptions } from "./env/backends/container.ts";
 export { FirecrackerBackend, type FirecrackerBackendOptions } from "./env/backends/firecracker.ts";
@@ -25,8 +25,10 @@ export type {
 	EnvironmentLease,
 	EnvironmentLimits,
 	EnvironmentSpec,
+	EnvironmentUsage,
 	InitialState,
 	IsolationLevel,
+	RootfsInfo,
 } from "./env/types.ts";
 
 // Resource bundles and routing
@@ -52,20 +54,39 @@ export {
 	listRunIds,
 	type Fidelity,
 	type ModelCallRecord,
+	type ModelConfigRecord,
 	type RunManifest,
 	type RunOutcome,
 	type RunStatus,
 	type ToolCallRecord,
 } from "./store/runs.ts";
-export { TRAJECTORY_FORMAT, exportRun, type ExportOptions, type ExportedCall, type ExportedTrajectory } from "./trajectory/export.ts";
+export {
+	CALL_FIELDS,
+	TRAJECTORY_FORMAT,
+	decodeTokenDeltas,
+	exportCall,
+	exportRun,
+	exportRunProjection,
+	type CallField,
+	type ExportOptions,
+	type ExportedCall,
+	type ExportedTrajectory,
+	type ProjectedCall,
+	type ProjectedTrajectory,
+	type ProjectionOptions,
+	type TokenDelta,
+} from "./trajectory/export.ts";
 export { ViewError, renderCallView, type CallView, type ResourceBlockKind, type ViewOptions } from "./trajectory/view.ts";
+export type { CallPayloadResult, CallViewRequest, CallViewResult, PayloadModelReport } from "./trajectory/replay.ts";
 export { renderTrajectoryMarkdown } from "./trajectory/render-md.ts";
 
 // Models and configuration
 export { loadConfig, saveConfig, parseModelRef, type CustomProviderConfig, type LilyConfig } from "./models/config.ts";
 export { buildModels, registerScriptedProvider, type ScriptedTurn } from "./models/registry.ts";
 export { vllmTokenCapture } from "./models/token-capture.ts";
+export { renderCallPayload } from "./models/payload.ts";
+export { modelConfigRecord } from "./models/config-record.ts";
 
 // HTTP control surface
-export { createApi } from "./server/api.ts";
+export { createApi, type ApiOptions } from "./server/api.ts";
 export { createHttpServer } from "./server/http.ts";

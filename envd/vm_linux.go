@@ -58,6 +58,59 @@ func vmSetup() error {
 	return nil
 }
 
+// overlayRoot turns the read-only root filesystem into the lower layer of a writable overlay whose
+// upper layer lives on dev (an empty ext4 disk of the VM's own), and makes that overlay the root:
+// every VM can share one read-only image while its writes stay on its own disk. It must run right
+// after vmSetup (it moves /dev, /proc and /sys into the new root and mounts a fresh /run there).
+func overlayRoot(dev string) error {
+	const base = "/run/lily-overlay"
+	rw, root := base+"/rw", base+"/root"
+	for _, dir := range []string{rw, root} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	if err := unix.Mount(dev, rw, "ext4", 0, ""); err != nil {
+		return fmt.Errorf("mount %s: %w", dev, err)
+	}
+	for _, dir := range []string{rw + "/upper", rw + "/work"} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	options := "lowerdir=/,upperdir=" + rw + "/upper,workdir=" + rw + "/work"
+	if err := unix.Mount("overlay", root, "overlay", 0, options); err != nil {
+		return fmt.Errorf("mount overlay (does the guest kernel have CONFIG_OVERLAY_FS?): %w", err)
+	}
+	// Submounts (/dev/pts, /sys/fs/cgroup, …) move along with their parents.
+	for _, dir := range []string{"/dev", "/proc", "/sys"} {
+		if err := unix.Mount(dir, root+dir, "", unix.MS_MOVE, ""); err != nil {
+			return fmt.Errorf("move %s: %w", dir, err)
+		}
+	}
+	old := root + "/.lily-oldroot"
+	if err := os.Mkdir(old, 0o700); err != nil {
+		return err
+	}
+	if err := unix.PivotRoot(root, old); err != nil {
+		return fmt.Errorf("pivot_root: %w", err)
+	}
+	if err := unix.Chdir("/"); err != nil {
+		return err
+	}
+	// The overlay keeps its own references to both layers; the old tree (and its /run) can go.
+	if err := unix.Unmount("/.lily-oldroot", unix.MNT_DETACH); err != nil {
+		return fmt.Errorf("detach the old root: %w", err)
+	}
+	if err := os.Remove("/.lily-oldroot"); err != nil {
+		log.Printf("init: %v", err)
+	}
+	if err := unix.Mount("tmpfs", "/run", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755"); err != nil {
+		return fmt.Errorf("mount /run: %w", err)
+	}
+	return nil
+}
+
 // loopbackUp sets IFF_UP on lo; the kernel then assigns 127.0.0.1/8 and ::1 itself.
 func loopbackUp() error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)

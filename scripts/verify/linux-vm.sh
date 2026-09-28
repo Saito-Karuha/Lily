@@ -7,7 +7,8 @@
 #   scripts/verify/linux-vm.sh fc-rootfs [img]  build /root/fc/rootfs.ext4 from an image (default python:3.12-slim)
 #   scripts/verify/linux-vm.sh test <backend> [vitest args]
 #                                               run test/isolation/backend-acceptance.test.ts in the VM
-#                                               (docker|gvisor|podman|podman-gvisor|firecracker)
+#                                               (docker|gvisor|podman|podman-gvisor|firecracker; firecracker
+#                                               also runs test/isolation/firecracker-rootfs.test.ts)
 #   scripts/verify/linux-vm.sh shell            interactive shell
 #   scripts/verify/linux-vm.sh rm               delete the VM
 #
@@ -59,10 +60,12 @@ run_test() {
   backend=${1:?backend}
   shift
   extra=""
+  files=test/isolation/backend-acceptance.test.ts
   if [ "$backend" = firecracker ]; then
     extra="LILY_FC_KERNEL=/root/fc/vmlinux LILY_FC_ROOTFS=/root/fc/rootfs.ext4 ${JAILER:+LILY_FC_JAILER=/usr/local/bin/jailer}"
+    files="$files test/isolation/firecracker-rootfs.test.ts"
   fi
-  vexec sh -c "cd /root/lily && LILY_TEST_BACKEND=$backend $extra ${LILY_TEST_ENV:-} npx vitest --run test/isolation/backend-acceptance.test.ts $*"
+  vexec sh -c "cd /root/lily && LILY_TEST_BACKEND=$backend $extra ${LILY_TEST_ENV:-} npx vitest --run $files $*"
 }
 
 fc_rootfs() {

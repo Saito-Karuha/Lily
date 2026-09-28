@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import {
 	type AgentHarness,
 	type AgentLane,
@@ -16,12 +16,13 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { EnvironmentManager } from "../env/manager.ts";
-import type { EnvironmentLease, EnvironmentSpec } from "../env/types.ts";
+import type { EnvironmentLease, EnvironmentSpec, EnvironmentUsage } from "../env/types.ts";
 import { createLilyTools, DEFAULT_OBSERVATION_CAP_BYTES, ExecutionGateway, type LilyToolContext } from "../kernel/gateway.ts";
 import { InvocationLedger } from "../kernel/ledger.ts";
 import { assembleSystemPrompt } from "../kernel/system-prompt.ts";
 import type { LilyConfig } from "../models/config.ts";
 import { parseModelRef } from "../models/config.ts";
+import { modelConfigRecord } from "../models/config-record.ts";
 import { RecordingModels, type TokenCaptureFactory } from "../models/recording.ts";
 import type { BundleRecord, BundleRegistry } from "../resources/registry.ts";
 import { baselineProcessor, createProcessor } from "../resources/processor/dsl.ts";
@@ -90,6 +91,9 @@ interface PinnedRun {
 	systemPrompt: string;
 	gateway: ExecutionGateway;
 	store: RunStore;
+	lease: EnvironmentLease;
+	/** The environment's usage when the run started, to report what the run itself used. */
+	usageAtStart?: EnvironmentUsage;
 }
 
 interface ActiveRun {
@@ -147,6 +151,8 @@ export class LilySession {
 	#active: ActiveRun | undefined;
 	#runChain: Promise<unknown> = Promise.resolve();
 	#closed = false;
+	/** The caller released the environment on purpose; the next one starts fresh without a warning. */
+	#released = false;
 
 	private constructor(services: RuntimeServices, session: Session<JsonlSessionMetadata>, binding: SessionBinding) {
 		this.#services = services;
@@ -392,7 +398,7 @@ export class LilySession {
 			}
 			this.events.emit({ type: "notice", level: "info", message: "Re-creating the environment to apply a different resource bundle." });
 			await this.lease.destroy();
-		} else if (this.binding.environment.current && this.binding.runs.length > 0 && spec.initialState.kind !== "mount") {
+		} else if (!this.#released && this.binding.environment.current && this.binding.runs.length > 0 && spec.initialState.kind !== "mount") {
 			this.events.emit({
 				type: "notice",
 				level: "warning",
@@ -402,8 +408,9 @@ export class LilySession {
 		this.events.emit({ type: "environment", status: "provisioning" });
 		try {
 			const resourcesDir = bundle ? await this.#services.registry.path(bundle) : undefined;
-			const lease = await envs.provision({ ...spec, initialState, ...(resourcesDir ? { resourcesDir } : {}) });
+			const lease = await envs.provision({ ...spec, initialState, ...(resourcesDir && bundle ? { resourcesDir, resourcesDigest: bundle } : {}) });
 			this.#lease = lease;
+			this.#released = false;
 			this.#leaseBundle = bundle;
 			this.binding.environment.current = { envId: lease.info.envId, generation: lease.info.generation, backend: lease.info.backend, bundle };
 			await this.#saveBinding();
@@ -452,6 +459,7 @@ export class LilySession {
 		const compaction = await this.#harness.getCompactionSettings(ctx);
 		const tools = createLilyTools().map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
 		const budget = { ...this.binding.budget, ...options.budget };
+		const capture = this.#services.tokenCapture?.(model);
 		const manifest: RunManifest = {
 			runId,
 			sessionId: this.id,
@@ -467,7 +475,7 @@ export class LilySession {
 				compaction,
 				observationCapBytes: DEFAULT_OBSERVATION_CAP_BYTES,
 			},
-			model: { provider: model.provider, modelId: model.id, api: model.api, thinkingLevel: this.binding.thinking },
+			model: modelConfigRecord(model, this.binding.thinking, capture ? (capture.mode ?? "custom") : "none"),
 			bundle: bundle ? { digest: bundle.digest, name: bundle.manifest.name, componentDigests: bundle.componentDigests } : null,
 			processorId: processor.id,
 			systemPrompt: { digest: sha256(assembled.text), blocks: assembled.blocks },
@@ -503,7 +511,8 @@ export class LilySession {
 				});
 			},
 		});
-		return { runId, manifest, systemPrompt: assembled.text, gateway, store };
+		const usageAtStart = await lease.usage();
+		return { runId, manifest, systemPrompt: assembled.text, gateway, store, lease, ...(usageAtStart ? { usageAtStart } : {}) };
 	}
 
 	/** Requests a durable abort of the active run, recording why. */
@@ -643,6 +652,13 @@ export class LilySession {
 			.map((part) => (part.type === "text" ? part.text : ""))
 			.join("")
 			.trim();
+		const usageAtEnd = await pinned.lease.usage();
+		const environmentUsage: RunOutcome["environmentUsage"] = usageAtEnd && {
+			envId: pinned.lease.info.envId,
+			...(usageAtEnd.cpuMs !== undefined ? { cpuMs: usageAtEnd.cpuMs - (pinned.usageAtStart?.cpuMs ?? 0) } : {}),
+			...(usageAtEnd.memoryPeakBytes !== undefined ? { memoryPeakBytes: usageAtEnd.memoryPeakBytes } : {}),
+			source: usageAtEnd.source,
+		};
 		const outcome: RunOutcome = {
 			runId: active.runId,
 			status,
@@ -656,6 +672,7 @@ export class LilySession {
 			usage,
 			...(finalText ? { finalText } : {}),
 			...(record ? { fromTipId: record.fromTipId, tipId: record.tipId } : {}),
+			...(environmentUsage ? { environmentUsage } : {}),
 		};
 		await pinned.store.writeOutcome(outcome);
 		this.#models.setSink(undefined);
@@ -689,7 +706,7 @@ export class LilySession {
 			processor: baselineProcessor,
 			onOutcomeUnknown: () => this.#stop("outcome_unknown", "blocked"),
 		});
-		this.#pinned = { runId, manifest, systemPrompt: "", gateway: gatewayUnavailable, store };
+		this.#pinned = { runId, manifest, systemPrompt: "", gateway: gatewayUnavailable, store, lease: deadLease(manifest) };
 		this.#active = active;
 		// The environment of the previous process is gone; stop the operation cleanly.
 		active.reason = "worker_restarted";
@@ -734,6 +751,19 @@ export class LilySession {
 		this.events.emit({ type: "steer_queued", runId, text });
 	}
 
+	/** The environment for caller operations between runs, provisioned for the bound bundle if none is live. */
+	async #idleLease(what: string): Promise<EnvironmentLease> {
+		if (this.#closed) throw new LilyError("session_closed", "Session is closed");
+		if (this.#active) throw new LilyError("session_busy", `Cannot ${what} while a run is active`);
+		return this.lease ?? (await this.#ensureEnvironment(this.binding.bundle === ROUTED_BUNDLE ? null : this.binding.bundle));
+	}
+
+	/** An environment path: absolute as given, relative to the workspace otherwise. */
+	#guestPath(lease: EnvironmentLease, path: string | undefined): string {
+		if (!path || path === ".") return lease.info.paths.workspace;
+		return posix.isAbsolute(path) ? posix.normalize(path) : posix.join(lease.info.paths.workspace, path);
+	}
+
 	/**
 	 * Runs a shell command in this session's environment on behalf of the caller
 	 * (for example to check the workspace after a run). It is not part of any
@@ -744,8 +774,7 @@ export class LilySession {
 		command: string,
 		options: { timeoutMs?: number; cwd?: string; maxOutputBytes?: number; signal?: AbortSignal } = {},
 	): Promise<{ exitCode: number | null; signal: string | null; timedOut: boolean; output: string; truncated: boolean; durationMs: number }> {
-		if (this.#active) throw new LilyError("session_busy", "Cannot exec while a run is active");
-		const lease = this.lease ?? (await this.#ensureEnvironment(this.binding.bundle === ROUTED_BUNDLE ? null : this.binding.bundle));
+		const lease = await this.#idleLease("exec");
 		const max = options.maxOutputBytes ?? 1024 * 1024;
 		const chunks: Buffer[] = [];
 		let kept = 0;
@@ -753,7 +782,7 @@ export class LilySession {
 		const exit = await lease.client.exec(
 			{
 				command,
-				cwd: options.cwd ?? lease.info.paths.workspace,
+				cwd: this.#guestPath(lease, options.cwd),
 				...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
 			},
 			{
@@ -795,9 +824,68 @@ export class LilySession {
 
 	/** gzip'd tar of the environment's workspace (provisions one if none is live). Only allowed between runs. */
 	async exportWorkspace(): Promise<Buffer> {
-		if (this.#active) throw new LilyError("session_busy", "Cannot export the workspace while a run is active");
-		const lease = this.lease ?? (await this.#ensureEnvironment(this.binding.bundle === ROUTED_BUNDLE ? null : this.binding.bundle));
-		return lease.exportWorkspace();
+		return (await this.#idleLease("export the workspace")).exportWorkspace();
+	}
+
+	/**
+	 * Extracts a gzip'd tar into the environment under `root` (default: the workspace; relative
+	 * paths are relative to it), for the caller: like `exec`, it is not part of any run and the
+	 * model never sees it. Only allowed between runs.
+	 */
+	async upload(archive: Uint8Array, options: { root?: string } = {}): Promise<{ root: string; files: number; bytes: number }> {
+		const lease = await this.#idleLease("upload files");
+		const root = this.#guestPath(lease, options.root);
+		const result = await lease.client.upload(root, archive);
+		return { root, files: result.files, bytes: result.bytes };
+	}
+
+	/** gzip'd tar of a directory in the environment (default: the workspace). Only allowed between runs. */
+	async download(path?: string): Promise<Buffer> {
+		const lease = await this.#idleLease("download files");
+		return lease.client.download(this.#guestPath(lease, path));
+	}
+
+	/** Writes one file in the environment (parent directories are created). Only allowed between runs. */
+	async writeFile(path: string, data: Uint8Array | string, options: { mode?: number } = {}): Promise<{ path: string; bytes: number }> {
+		const lease = await this.#idleLease("write files");
+		const target = this.#guestPath(lease, path);
+		const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : Buffer.from(data);
+		const chunk = 4 * 1024 * 1024;
+		for (let offset = 0; offset === 0 || offset < bytes.byteLength; offset += chunk) {
+			const part = bytes.subarray(offset, offset + chunk);
+			await lease.client.request("fs.write", {
+				path: target,
+				data: part.toString("base64"),
+				append: offset > 0,
+				mkdirs: true,
+				...(options.mode !== undefined ? { mode: options.mode } : {}),
+			});
+		}
+		return { path: target, bytes: bytes.byteLength };
+	}
+
+	/** Reads one file from the environment (at most `maxBytes`, default 64 MiB). Only allowed between runs. */
+	async readFile(path: string, options: { maxBytes?: number } = {}): Promise<{ path: string; data: Buffer; size: number; complete: boolean }> {
+		const lease = await this.#idleLease("read files");
+		const target = this.#guestPath(lease, path);
+		const result = await lease.client.readFile(target, options.maxBytes ?? 64 * 1024 * 1024);
+		return { path: target, ...result };
+	}
+
+	/**
+	 * Destroys the session's environment now, freeing its capacity; the session stays usable and the
+	 * next run (or exec, upload, …) provisions a fresh one from the initial state. Only allowed between runs.
+	 */
+	async releaseEnvironment(): Promise<boolean> {
+		if (this.#active) throw new LilyError("session_busy", "Cannot release the environment while a run is active");
+		await this.#provisioning?.promise.catch(() => {});
+		const lease = this.lease;
+		if (!lease) return false;
+		this.#lease = undefined;
+		this.#released = true;
+		await lease.destroy();
+		this.events.emit({ type: "environment", status: "destroyed", info: lease.info });
+		return true;
 	}
 
 	async compact(customInstructions?: string): Promise<{ status: string; entryId?: string }> {
@@ -890,6 +978,7 @@ function deadLease(manifest: RunManifest): EnvironmentLease {
 		client: { closed: true } as EnvironmentLease["client"],
 		env: undefined as unknown as EnvironmentLease["env"],
 		exportWorkspace: unavailable,
+		usage: async () => undefined,
 		destroy: async () => {},
 		destroyed: true,
 	};

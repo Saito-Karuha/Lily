@@ -27,7 +27,7 @@ export interface RunManifest {
 		compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
 		observationCapBytes: number;
 	};
-	model: { provider: string; modelId: string; api: string; thinkingLevel: string };
+	model: ModelConfigRecord;
 	bundle: { digest: Digest; name: string; componentDigests: Record<Component, Digest> } | null;
 	processorId: string;
 	systemPrompt: { digest: Digest; blocks: PromptBlock[] };
@@ -37,6 +37,31 @@ export interface RunManifest {
 	labels?: Record<string, string>;
 	/** Present when the session is bound to `@router`: which router chose `bundle`, and why. */
 	route?: RouteRecord;
+}
+
+/**
+ * The model a run called and the configuration that shaped its requests. Fields after
+ * `thinkingLevel` are recorded since Lily 0.2; `configDigest` covers all of them, so two runs
+ * whose requests could differ only through configuration have different digests.
+ */
+export interface ModelConfigRecord {
+	provider: string;
+	modelId: string;
+	api: string;
+	thinkingLevel: string;
+	/** Digests only: URLs and headers can carry credentials. */
+	baseUrlDigest?: Digest;
+	headersDigest?: Digest;
+	contextWindow?: number;
+	maxTokens?: number;
+	reasoning?: boolean;
+	input?: string[];
+	samplingParams?: Record<string, unknown>;
+	compat?: Record<string, unknown>;
+	thinkingLevelMap?: Record<string, unknown>;
+	/** How engine token ids are captured: "vllm", "custom" (an SDK-supplied capture) or "none". */
+	tokenCapture?: string;
+	configDigest?: Digest;
 }
 
 export type Fidelity = "semantic" | "request_exact" | "token_exact";
@@ -103,6 +128,11 @@ export interface RunOutcome {
 	finalText?: string;
 	fromTipId?: string | null;
 	tipId?: string | null;
+	/**
+	 * What the run's environment used, when its backend measures it: `cpuMs` during this run,
+	 * `memoryPeakBytes` since the environment was created (it is not reset between runs).
+	 */
+	environmentUsage?: { envId: string; cpuMs?: number; memoryPeakBytes?: number; source: "host" | "guest" };
 }
 
 /** Filesystem layout of one run: manifest, call records, tool records, outcome. */

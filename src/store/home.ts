@@ -49,6 +49,10 @@ export class LilyHome {
 	get envs(): string {
 		return join(this.root, "envs");
 	}
+	/** Derived files that can be recreated at any time (packed resource drives, image digests). */
+	get cache(): string {
+		return join(this.root, "cache");
+	}
 	get batches(): string {
 		return join(this.root, "batches");
 	}

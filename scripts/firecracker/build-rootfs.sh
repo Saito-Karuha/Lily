@@ -7,8 +7,9 @@
 #
 # The image's filesystem is exported, lily-envd is installed at /opt/lily/bin/lily-envd
 # (the kernel runs it as init), the image's ENV is saved to /opt/lily/image.env (init loads
-# it), and the result is packed into a sparse ext4 image of the given size. The size is the
-# environment's disk: the workspace lives on this filesystem.
+# it), and the result is packed into a sparse ext4 image of the given size. In the backend's
+# default overlay mode VMs share the image read-only and write to their own disk (limits.diskMb);
+# in copy/reflink mode each VM gets a copy and the size is the environment's disk.
 #
 # Rebuild the image whenever lily-envd changes: the guest runs the envd baked in here.
 set -euo pipefail

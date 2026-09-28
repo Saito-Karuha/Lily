@@ -30,6 +30,8 @@ export interface TokenEvidence {
 /** Optional per-request hook that wraps `fetch` to capture token ids for engines that return them. */
 export type TokenCaptureFactory = (model: Model<Api>) =>
 	| {
+			/** Recorded in run manifests (`model.tokenCapture`); default "custom". */
+			mode?: string;
 			fetch: typeof globalThis.fetch;
 			patchOptions?: (options: ModelsSimpleStreamOptions) => ModelsSimpleStreamOptions;
 			/** Resolves once the captured response has been fully read. */

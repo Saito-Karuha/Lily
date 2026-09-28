@@ -33,20 +33,24 @@ const API_IMPLEMENTATIONS: Record<CustomProviderConfig["api"], () => ProviderStr
 };
 
 export function customProvider(id: string, config: CustomProviderConfig) {
-	const models: Model<Api>[] = config.models.map((m) => ({
-		id: m.id,
-		name: m.name ?? m.id,
-		api: config.api,
-		provider: id,
-		baseUrl: config.baseUrl,
-		reasoning: m.reasoning ?? false,
-		input: m.input ?? ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: m.contextWindow ?? 32_768,
-		maxTokens: m.maxTokens ?? 8192,
-		...(m.samplingParams ? { samplingParams: m.samplingParams } : {}),
-		...(config.headers ? { headers: config.headers } : {}),
-	}));
+	const models: Model<Api>[] = config.models.map((m) => {
+		const compat = config.compat || m.compat ? { ...config.compat, ...m.compat } : undefined;
+		return {
+			id: m.id,
+			name: m.name ?? m.id,
+			api: config.api,
+			provider: id,
+			baseUrl: config.baseUrl,
+			reasoning: m.reasoning ?? false,
+			input: m.input ?? ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: m.contextWindow ?? 32_768,
+			maxTokens: m.maxTokens ?? 8192,
+			...(m.samplingParams ? { samplingParams: m.samplingParams } : {}),
+			...(config.headers ? { headers: config.headers } : {}),
+			...(compat ? { compat: compat as Model<Api>["compat"] } : {}),
+		};
+	});
 	return createProvider({
 		id,
 		baseUrl: config.baseUrl,

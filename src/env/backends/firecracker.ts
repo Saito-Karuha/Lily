@@ -1,14 +1,17 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { accessSync } from "node:fs";
-import { access, chown, constants, copyFile, link, lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chown, constants, copyFile, link, lstat, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { sleep } from "../../util/async.ts";
+import { LilyError } from "../../util/errors.ts";
 import { EnvdClient } from "../envd-client.ts";
 import type { BackendInstance, EnvironmentBackend, EnvironmentSpec, IsolationLevel } from "../types.ts";
+import { hostProcessUsage } from "../usage.ts";
 import { GUEST_PATHS } from "./container.ts";
+import { DerivedFileCache, fileDigest } from "./file-cache.ts";
 
 const run = promisify(execFile);
 
@@ -24,8 +27,25 @@ export interface FirecrackerBackendOptions {
 	gid?: number;
 	/** Uncompressed guest kernel (vmlinux / arm64 Image) built for Firecracker. */
 	kernel: string;
-	/** ext4 root filesystem containing a Linux userland and /opt/lily/bin/lily-envd (see scripts/firecracker). */
-	rootfs: string;
+	/**
+	 * Default ext4 root filesystem (a Linux userland with /opt/lily/bin/lily-envd, see
+	 * scripts/firecracker), used when the spec names neither a `rootfs` nor an `image` from `images`.
+	 */
+	rootfs?: string;
+	/** Root filesystems by image name: a spec's `image` selects one. */
+	images?: Record<string, string>;
+	/**
+	 * How a VM gets a writable root filesystem (default "overlay"):
+	 * - "overlay": the image is attached read-only and shared by all VMs; the VM's writes go to its
+	 *   own sparse ext4 disk of `limits.diskMb` (default `diskMb`) that envd stacks on top with
+	 *   overlayfs. Creation time does not depend on the image size. Needs overlayfs in the guest kernel.
+	 * - "reflink": every VM gets a reflink copy of the image; fails unless the filesystem holding the
+	 *   image and the Lily home supports reflinks (XFS, btrfs).
+	 * - "copy": a reflink copy where possible, a full sparse copy otherwise (slow for large images).
+	 */
+	rootfsMode?: "overlay" | "reflink" | "copy";
+	/** Writable disk of an overlay-mode VM when the spec has no `limits.diskMb`, in MiB. Default 4096. */
+	diskMb?: number;
 	/** Default vCPUs / memory when the spec has no limits. */
 	vcpus?: number;
 	memoryMb?: number;
@@ -35,31 +55,50 @@ export interface FirecrackerBackendOptions {
 	mkfs?: string;
 	/** Seconds to wait for the guest to boot and accept the controller. */
 	bootTimeoutMs?: number;
+	/**
+	 * Directory for files shared between VMs: resource drives packed once per bundle digest, and
+	 * image digests. Without it every VM packs its own resource drive.
+	 */
+	cacheDir?: string;
+	/** Size budget of the resource drive cache, in MiB. Default 1024. */
+	resourceCacheMb?: number;
 }
 
 const DEFAULT_PIDS = 1024;
+const DEFAULT_DISK_MB = 4096;
+
+/** `/dev/vda`, `/dev/vdb`, …: drives appear in configuration order. */
+function driveDevice(index: number): string {
+	return `/dev/vd${String.fromCharCode(97 + index)}`;
+}
 
 /**
  * One Firecracker microVM per environment (Linux + KVM).
  *
  * The guest kernel boots `lily-envd init --vm --vsock-port N` as PID 1; init starts a vsock
  * server child and the controller connects through Firecracker's vsock-over-UDS bridge
- * (`CONNECT <port>` handshake). The VM has no network device at all (only loopback), a private
- * copy-on-write copy of the root filesystem, and its own kernel. The workspace is uploaded
- * through envd after boot; the resource bundle is packed into an ext4 image attached as a
- * read-only drive, so not even root in the guest can modify it.
+ * (`CONNECT <port>` handshake). The VM has no network device at all (only loopback), its own
+ * kernel and its own writable root filesystem (by default an overlay over a shared read-only
+ * image). The workspace is uploaded through envd after boot; the resource bundle is an ext4
+ * image attached as a read-only drive, so not even root in the guest can modify it.
  */
 export class FirecrackerBackend implements EnvironmentBackend {
 	readonly name = "firecracker";
 	readonly isolation: IsolationLevel = "vm";
 	readonly #options: FirecrackerBackendOptions;
+	readonly #drives: DerivedFileCache | undefined;
 
 	constructor(options: FirecrackerBackendOptions) {
 		this.#options = options;
+		this.#drives = options.cacheDir ? new DerivedFileCache(join(options.cacheDir, "resources"), (options.resourceCacheMb ?? 1024) * 1024 * 1024) : undefined;
 	}
 
 	get #firecracker(): string {
 		return this.#options.firecracker ?? "firecracker";
+	}
+
+	get #mode(): "overlay" | "reflink" | "copy" {
+		return this.#options.rootfsMode ?? "overlay";
 	}
 
 	async probe(): Promise<{ available: boolean; reason?: string }> {
@@ -69,7 +108,9 @@ export class FirecrackerBackend implements EnvironmentBackend {
 		} catch {
 			return { available: false, reason: "/dev/kvm is not accessible" };
 		}
-		for (const path of [this.#options.kernel, this.#options.rootfs]) {
+		const images = [this.#options.rootfs, ...Object.values(this.#options.images ?? {})].filter((p): p is string => Boolean(p));
+		if (images.length === 0) return { available: false, reason: "no root filesystem configured (firecracker.rootfs or firecracker.images)" };
+		for (const path of [this.#options.kernel, ...images]) {
 			try {
 				await access(path, constants.R_OK);
 			} catch {
@@ -91,28 +132,49 @@ export class FirecrackerBackend implements EnvironmentBackend {
 		return { available: true };
 	}
 
+	/** The root filesystem for a spec: its own `rootfs`, the one mapped to its `image`, or the default. */
+	#rootfsFor(spec: EnvironmentSpec): string {
+		if (spec.rootfs) return resolve(spec.rootfs);
+		const images = this.#options.images;
+		if (spec.image && images) {
+			const mapped = images[spec.image];
+			if (!mapped) throw new LilyError("invalid_environment", `The firecracker backend has no root filesystem for image ${spec.image} (known: ${Object.keys(images).join(", ") || "none"}; see firecracker.images)`);
+			return resolve(mapped);
+		}
+		if (this.#options.rootfs) return resolve(this.#options.rootfs);
+		throw new LilyError("invalid_environment", "The firecracker backend has no root filesystem: set firecracker.rootfs or firecracker.images, or give the spec a rootfs");
+	}
+
 	async create(envId: string, spec: EnvironmentSpec, stateDir: string): Promise<BackendInstance> {
-		if (spec.initialState.kind === "mount") throw new Error("The firecracker backend copies workspaces in; host directory mounts are not supported");
-		if (spec.limits?.network === "egress") throw new Error("The firecracker backend has no network device; egress is not supported");
+		if (spec.initialState.kind === "mount") throw new LilyError("invalid_environment", "The firecracker backend copies workspaces in; host directory mounts are not supported");
+		if (spec.limits?.network === "egress") throw new LilyError("invalid_environment", "The firecracker backend has no network device; egress is not supported");
+		const rootfs = this.#rootfsFor(spec);
+		try {
+			await access(rootfs, constants.R_OK);
+		} catch {
+			throw new LilyError("invalid_environment", `Root filesystem ${rootfs} is not readable`);
+		}
+		// Hashing a large image takes seconds the first time (then it is cached): overlap it with the boot.
+		const rootfsDigest = fileDigest(rootfs, this.#options.cacheDir ? join(this.#options.cacheDir, "digests.json") : undefined);
+		rootfsDigest.catch(() => {});
+		const mode = this.#mode;
 		await mkdir(stateDir, { recursive: true });
 		const jail = this.#options.jailer ? jailLayout(envId, stateDir, this.#firecracker) : undefined;
 		// Files the VMM opens live in `root`: the state dir itself, or the jailer's chroot.
 		const root = jail?.root ?? stateDir;
 		const guestPath = (name: string) => (jail ? `/${name}` : join(root, name));
+		// Hard links to files shared with other VMs (the image, cached drives): never chowned for a jail.
+		const shared = new Set<string>();
 		let child: ChildProcess | undefined;
+		const details: Record<string, unknown> = { stateDir, rootfsMode: mode, jailer: Boolean(jail) };
 		try {
 			await mkdir(root, { recursive: true });
-			// Reflink where the filesystem supports it (btrfs/xfs), sparse copy otherwise.
-			await run("cp", ["--reflink=auto", "--sparse=always", this.#options.rootfs, join(root, "rootfs.ext4")]);
-			const drives: Array<Record<string, unknown>> = [
-				{ drive_id: "rootfs", path_on_host: guestPath("rootfs.ext4"), is_root_device: true, is_read_only: false },
-			];
-			const port = this.#options.vsockPort ?? 1024;
+			const drives: Array<Record<string, unknown>> = [];
 			const initArgs = [
 				"init",
 				"--vm",
 				"--vsock-port",
-				String(port),
+				String(this.#options.vsockPort ?? 1024),
 				"--mkdir",
 				GUEST_PATHS.workspace,
 				"--mkdir",
@@ -127,20 +189,45 @@ export class FirecrackerBackend implements EnvironmentBackend {
 				"--pids-max",
 				String(spec.limits?.pids ?? DEFAULT_PIDS),
 			];
+			if (mode === "overlay") {
+				let image = rootfs;
+				if (jail) {
+					image = join(root, "rootfs.ext4");
+					await this.#shareIntoJail(rootfs, image);
+					shared.add(image);
+				}
+				drives.push({ drive_id: "rootfs", path_on_host: jail ? "/rootfs.ext4" : image, is_root_device: true, is_read_only: true });
+				const diskMb = Math.max(64, Math.ceil(spec.limits?.diskMb ?? this.#options.diskMb ?? DEFAULT_DISK_MB));
+				await this.#scratchDisk(join(root, "rw.ext4"), diskMb);
+				drives.push({ drive_id: "rw", path_on_host: guestPath("rw.ext4"), is_root_device: false, is_read_only: false });
+				initArgs.push("--overlay", driveDevice(drives.length - 1));
+				details.diskMb = diskMb;
+			} else {
+				await copyImage(rootfs, join(root, "rootfs.ext4"), mode);
+				drives.push({ drive_id: "rootfs", path_on_host: guestPath("rootfs.ext4"), is_root_device: true, is_read_only: false });
+			}
 			if (spec.resourcesDir) {
-				await this.#packDrive(spec.resourcesDir, join(root, "resources.ext4"));
-				drives.push({ drive_id: "resources", path_on_host: guestPath("resources.ext4"), is_root_device: false, is_read_only: true });
-				// Drives appear in configuration order after the root device: vda, vdb, …
-				initArgs.push("--mount-ro", `/dev/vd${String.fromCharCode(97 + drives.length - 1)}:${GUEST_PATHS.resources}`);
+				const drive = await this.#resourceDrive(spec.resourcesDir, spec.resourcesDigest, root);
+				let path = drive.path;
+				if (jail && drive.cached) {
+					path = join(root, "resources.ext4");
+					await this.#shareIntoJail(drive.path, path);
+					shared.add(path);
+				}
+				details.resourceDrive = drive.cached ? "cached" : "packed";
+				drives.push({ drive_id: "resources", path_on_host: jail ? "/resources.ext4" : path, is_root_device: false, is_read_only: true });
+				initArgs.push("--mount-ro", `${driveDevice(drives.length - 1)}:${GUEST_PATHS.resources}`);
 			} else {
 				initArgs.push("--mkdir", GUEST_PATHS.resources);
 			}
 			let kernel = this.#options.kernel;
 			if (jail) {
-				await linkOrCopy(kernel, join(root, "vmlinux"));
+				// A hard link when the jailed VMM can read the kernel, else a private copy (chowned below).
+				if (await this.#linkIfReadable(kernel, join(root, "vmlinux"))) shared.add(join(root, "vmlinux"));
+				else await copyFile(kernel, join(root, "vmlinux"));
 				kernel = "/vmlinux";
 			}
-			// The kernel hands everything after "--" to init; Firecracker adds root=/dev/vda rw before it.
+			// The kernel hands everything after "--" to init; Firecracker adds root=/dev/vda before it.
 			const bootArgs = ["console=ttyS0", "reboot=k", "panic=1", "pci=off", "quiet", "init=/opt/lily/bin/lily-envd", "--", ...initArgs].join(" ");
 			const config = {
 				"boot-source": { kernel_image_path: kernel, boot_args: bootArgs },
@@ -153,7 +240,8 @@ export class FirecrackerBackend implements EnvironmentBackend {
 				vsock: { guest_cid: 3, uds_path: guestPath("v.sock") },
 			};
 			await writeFile(join(root, "vm.json"), JSON.stringify(config, null, 2));
-			if (jail) await chownTree(root, this.#options.uid ?? 1000, this.#options.gid ?? 1000);
+			if (jail) await chownTree(root, this.#options.uid ?? 1000, this.#options.gid ?? 1000, shared);
+			const booted = Date.now();
 			child = this.#launch(envId, jail ? "/vm.json" : join(root, "vm.json"), stateDir);
 			const log: string[] = [];
 			child.stdout?.on("data", (d: Buffer) => log.length < 400 && log.push(d.toString()));
@@ -169,7 +257,7 @@ export class FirecrackerBackend implements EnvironmentBackend {
 					await rm(shortcut, { force: true });
 					await symlink(uds, shortcut);
 				}
-				socket = await connectVsock(shortcut ?? uds, port, this.#options.bootTimeoutMs ?? 60_000, child);
+				socket = await connectVsock(shortcut ?? uds, this.#options.vsockPort ?? 1024, this.#options.bootTimeoutMs ?? 60_000, child);
 			} catch (error) {
 				throw new Error(`microVM ${envId} did not come up: ${(error as Error).message}\n${log.join("").slice(-3000)}`);
 			} finally {
@@ -182,13 +270,17 @@ export class FirecrackerBackend implements EnvironmentBackend {
 				socket.destroy();
 				throw new Error(`lily-envd in microVM ${envId} did not answer: ${(error as Error).message}\n${log.join("").slice(-3000)}`);
 			}
+			details.bootMs = Date.now() - booted;
 			const vm = child;
+			const { digest, bytes } = await rootfsDigest;
 			return {
 				paths: GUEST_PATHS,
 				client,
-				details: { pid: vm.pid, stateDir, vsock: join(root, "v.sock"), jailer: Boolean(jail) },
+				details: { ...details, pid: vm.pid, vsock: join(root, "v.sock") },
 				resourcesMounted: Boolean(spec.resourcesDir),
 				workspaceProvided: false,
+				rootfs: { path: rootfs, digest, bytes },
+				usage: () => (vm.pid ? hostProcessUsage(vm.pid) : Promise.resolve(undefined)),
 				destroy: async () => {
 					await client.shutdown().catch(() => {});
 					socket.destroy();
@@ -200,6 +292,58 @@ export class FirecrackerBackend implements EnvironmentBackend {
 			if (child) await stopProcess(child);
 			await rm(stateDir, { recursive: true, force: true }).catch(() => {});
 			throw error;
+		}
+	}
+
+	/** An empty sparse ext4 disk for an overlay's upper layer (no journal: the disk dies with the VM). */
+	async #scratchDisk(image: string, sizeMb: number): Promise<void> {
+		await run("truncate", ["-s", `${sizeMb}M`, image]);
+		await run(this.#options.mkfs ?? "mkfs.ext4", ["-q", "-F", "-m", "0", "-O", "^has_journal", "-E", "lazy_itable_init=1,nodiscard", "-L", "lily-rw", image], {
+			timeout: 120_000,
+		});
+	}
+
+	/** The bundle's read-only drive: from the cache when the bundle digest is known, else packed for this VM. */
+	async #resourceDrive(dir: string, digest: string | undefined, root: string): Promise<{ path: string; cached: boolean }> {
+		if (this.#drives && digest) {
+			return { path: await this.#drives.get(digest.replace(/^sha256:/, ""), ".ext4", (path) => this.#packDrive(dir, path)), cached: true };
+		}
+		const path = join(root, "resources.ext4");
+		await this.#packDrive(dir, path);
+		return { path, cached: false };
+	}
+
+	/**
+	 * Makes a file shared with other VMs visible in a jail's chroot without copying it: a hard link
+	 * (the chroot must be on the same filesystem). The jailed VMM must be able to read it.
+	 */
+	async #shareIntoJail(file: string, target: string): Promise<void> {
+		if (!(await this.#readableInJail(file))) throw new Error(`${file} must be readable by the jailer's uid ${this.#options.uid ?? 1000} (for example chmod 644)`);
+		try {
+			await link(file, target);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+				throw new Error(`${file} must be on the same filesystem as the Lily home to be shared with jailed VMs`);
+			}
+			throw error;
+		}
+	}
+
+	async #readableInJail(file: string): Promise<boolean> {
+		const st = await stat(file);
+		const uid = this.#options.uid ?? 1000;
+		const gid = this.#options.gid ?? 1000;
+		return Boolean(st.mode & 0o004 || (st.uid === uid && st.mode & 0o400) || (st.gid === gid && st.mode & 0o040));
+	}
+
+	/** Hard-links `file` into a jail when the jailed VMM can read it there; false when it cannot (or the link fails). */
+	async #linkIfReadable(file: string, target: string): Promise<boolean> {
+		if (!(await this.#readableInJail(file))) return false;
+		try {
+			await link(file, target);
+			return true;
+		} catch {
+			return false;
 		}
 	}
 
@@ -318,20 +462,30 @@ async function stopProcess(child: ChildProcess): Promise<void> {
 	await Promise.race([exited, sleep(5000)]);
 }
 
-async function linkOrCopy(from: string, to: string): Promise<void> {
-	try {
-		await link(from, to);
-	} catch {
-		await copyFile(from, to);
-	}
-}
-
-async function chownTree(dir: string, uid: number, gid: number): Promise<void> {
+async function chownTree(dir: string, uid: number, gid: number, skip: Set<string>): Promise<void> {
 	await chown(dir, uid, gid);
 	for (const entry of await readdir(dir, { withFileTypes: true })) {
 		const path = join(dir, entry.name);
-		if (entry.isDirectory()) await chownTree(path, uid, gid);
+		if (skip.has(path)) continue;
+		if (entry.isDirectory()) await chownTree(path, uid, gid, skip);
 		else await chown(path, uid, gid);
+	}
+}
+
+/** A private writable copy of an image for one VM. */
+async function copyImage(from: string, to: string, mode: "reflink" | "copy"): Promise<void> {
+	if (mode === "copy") {
+		// Reflink where the filesystem supports it (btrfs/xfs), sparse copy otherwise.
+		await run("cp", ["--reflink=auto", "--sparse=always", from, to]);
+		return;
+	}
+	try {
+		await run("cp", ["--reflink=always", from, to]);
+	} catch (error) {
+		throw new Error(
+			`Cannot reflink ${from}: the filesystem holding it and the Lily home must support reflinks (XFS, btrfs) and be the same filesystem. ` +
+				`Use firecracker.rootfsMode "overlay" (the default) or "copy" instead (${((error as { stderr?: string }).stderr ?? "").trim()})`,
+		);
 	}
 }
 

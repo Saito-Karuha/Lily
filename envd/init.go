@@ -34,6 +34,7 @@ func initMain(args []string) int {
 	pidsMax := fset.Int("pids-max", 0, "limit the number of tasks of everything below init (cgroup pids controller, linux)")
 	envFile := fset.String("env-file", "", "KEY=VALUE lines (an image's ENV) added to init's environment, which sessions inherit")
 	vm := fset.Bool("vm", false, "envd is the kernel's init in a VM: mount /proc, /sys, /dev, … and bring up loopback first (linux)")
+	overlay := fset.String("overlay", "", "with --vm: stack a writable overlay on the read-only root, its upper layer on this ext4 DEVICE, and pivot into it (linux)")
 	vsockPort := fset.Uint("vsock-port", 0, "also serve controllers connecting on this AF_VSOCK port, one at a time (linux)")
 	cwd := fset.String("cwd", "/workspace", "default working directory for vsock sessions")
 	home := fset.String("home", "/home/agent", "HOME for commands in vsock sessions")
@@ -53,6 +54,19 @@ func initMain(args []string) int {
 	if *vm {
 		if err := vmSetup(); err != nil {
 			log.Printf("init: %v", err)
+			return 1
+		}
+	}
+	// Resolved (from /proc, mounted by vmSetup in a VM) before the root can change: the same path
+	// names this binary in the overlay root.
+	exe, exeErr := os.Executable()
+	if *overlay != "" {
+		if !*vm {
+			log.Printf("init: --overlay needs --vm")
+			return 2
+		}
+		if err := overlayRoot(*overlay); err != nil {
+			log.Printf("init: --overlay: %v", err)
 			return 1
 		}
 	}
@@ -113,11 +127,11 @@ func initMain(args []string) int {
 	server := 0
 	var serverArgs []string
 	if *vsockPort != 0 {
-		exe, err := os.Executable()
-		if err != nil {
-			log.Printf("init: %v", err)
+		if exeErr != nil {
+			log.Printf("init: %v", exeErr)
 			return 1
 		}
+		var err error
 		serverArgs = []string{exe, "serve", "--vsock-port", strconv.FormatUint(uint64(*vsockPort), 10), "--accept-loop",
 			"--cwd", *cwd, "--tmp", *tmp, "--home", *home}
 		if server, err = startChild(serverArgs); err != nil {

@@ -29,12 +29,33 @@ export class Semaphore {
 		this.#available = permits;
 	}
 
+	/** Permits not currently held. */
+	get available(): number {
+		return this.#available;
+	}
+
+	/** Callers blocked in `acquire()`. */
+	get waiting(): number {
+		return this.#waiters.length;
+	}
+
 	async acquire(): Promise<() => void> {
 		if (this.#available > 0) {
 			this.#available--;
 		} else {
 			await new Promise<void>((resolve) => this.#waiters.push(resolve));
 		}
+		return this.#releaser();
+	}
+
+	/** Takes a permit only if one is free right now. */
+	tryAcquire(): (() => void) | undefined {
+		if (this.#available === 0) return undefined;
+		this.#available--;
+		return this.#releaser();
+	}
+
+	#releaser(): () => void {
 		let released = false;
 		return () => {
 			if (released) return;

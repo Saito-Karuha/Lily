@@ -99,6 +99,31 @@ describe("bundle registry", () => {
 });
 
 describe("resource rendering and prompt assembly", () => {
+	it("includes the fixed tool guidelines without a resource bundle", () => {
+		const prompt = assembleSystemPrompt(undefined, { workspace: "/workspace" });
+		const kernel = prompt.blocks[0]!.text;
+		expect(kernel.split("Guidelines:\n")[1]!.split("\n")).toEqual([
+			"- Use bash for file operations like ls, rg, find",
+			"- Prefer read over cat or sed for examining files. If read cannot handle a file or an individual line because of size limits, use bash to inspect a bounded portion.",
+			"- Use edit for precise changes (edits[].oldText must match exactly)",
+			"- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
+			"- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
+			"- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+			"- Use write only for new files or complete rewrites.",
+			"- Be concise in your responses",
+			"- Show file paths clearly when working with files",
+		]);
+		expect(prompt.blocks.map((b) => b.kind)).toEqual(["kernel", "environment"]);
+		expect(prompt.text).not.toContain("PI_*");
+	});
+
+	it("renders the empty base bundle identically to no bundle", async () => {
+		const index = await indexBundle(BASE);
+		const rendered = await renderResources(BASE, index, "/opt/lily/resources");
+		const env = { workspace: "/workspace" };
+		expect(assembleSystemPrompt(rendered, env)).toEqual(assembleSystemPrompt(undefined, env));
+	});
+
 	it("renders every component with guest paths and records block provenance", async () => {
 		const index = await indexBundle(DEMO);
 		const rendered = await renderResources(DEMO, index, "/opt/lily/resources");
@@ -112,6 +137,7 @@ describe("resource rendering and prompt assembly", () => {
 		expect(prompt.blocks.find((b) => b.kind === "attached_prompt")?.componentDigest).toBe(index.componentDigests.P);
 		const bare = assembleSystemPrompt(undefined, { workspace: "/workspace" });
 		expect(bare.blocks.map((b) => b.kind)).toEqual(["kernel", "environment"]);
+		expect(prompt.blocks[0]).toEqual(bare.blocks[0]);
 	});
 });
 

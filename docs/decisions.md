@@ -107,3 +107,6 @@ Callers that check results in a clean environment need to place hidden files and
 
 ## D35 — Provider `compat` passes through
 Custom providers accept pi-ai's `compat` settings (provider-wide and per model), for example `sendSessionAffinityHeaders` so that an engine or router in front of several replicas can keep a session on one of them, or `chatTemplateKwargs`. Pi already sends the session key (`<session id>:main`) with every request; Lily only exposes the setting and records it in the manifest.
+
+## D36 — Basic tool usage belongs in the fixed kernel prompt
+The kernel prompt includes Pi 0.85.1 coding-agent's general read/edit/write guidelines, not just its one-line tool summaries. These explain the existing tools rather than prescribing a task workflow, so they apply without a resource bundle and are separate from a bundle's U guidance. The read guideline permits bounded inspection through bash when a file or line exceeds read's limits. Pi's `PI_*` environment-variable guidance is omitted because Lily does not expose that coding-agent mechanism. This model-visible change bumps the kernel identifier to `lily-kernel/0.1.1`; tool schemas, execution and the no-implicit-project-context decision (D13) are unchanged.

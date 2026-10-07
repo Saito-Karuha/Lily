@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 — 2026-10-07
+
+**Fixes**
+- The fixed system prompt now includes Pi's general read/edit/write usage guidelines: prefer `read` for files, batch independent edits against the original file, keep replacement text small and unique, and use `write` for new files or complete rewrites. When `read` cannot handle a file or line because of size limits, the prompt allows inspecting a bounded portion with `bash`.
+- These guidelines apply even without a resource bundle. Tool schemas, execution, resource blocks and project-context loading are unchanged; Pi-specific environment-variable guidance is not included.
+
+**Reproducibility**
+- The model-visible prompt changed, so the kernel identifier is now `lily-kernel/0.1.1` (previously `lily-kernel/0.1.0`). Pi dependencies remain pinned to 0.85.1.
+
 ## 0.2.0 — 2026-09-28
 
 Mechanisms for programs that drive many isolated runs — schedulers, evaluators, trainers — over the HTTP API or the SDK.

@@ -54,6 +54,7 @@ describe("Lily runtime end to end (scripted model, local environment)", () => {
 
 		const store = new RunStore(runtime.home.run(handle.runId));
 		const manifest = await store.readManifest();
+		expect(manifest.kernel.version).toBe("lily-kernel/0.1.1");
 		expect(manifest.bundle?.digest).toBe(demo.digest);
 		expect(manifest.systemPrompt.blocks.map((b) => b.kind)).toEqual(["kernel", "attached_prompt", "tool_guidance", "skills", "memory", "environment"]);
 		expect(manifest.processorId).toMatch(/^sha256:/);

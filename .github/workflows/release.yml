@@ -83,12 +83,12 @@ jobs:
           elif [ "$TRUSTED_PUBLISHING" = "true" ]; then
             # Trusted publishing needs npm 11.5.1 or newer; npm adds provenance for public repositories.
             npm install -g npm@11
-            npm publish "out/lily-harness-$VERSION.tgz" --access public
+            npm publish "./out/lily-harness-$VERSION.tgz" --access public
           elif [ -n "$NODE_AUTH_TOKEN" ]; then
             flags="--access public"
             # npm only issues provenance statements for public source repositories.
             if [ "$PUBLIC_REPO" = "true" ]; then flags="$flags --provenance"; fi
-            npm publish "out/lily-harness-$VERSION.tgz" $flags
+            npm publish "./out/lily-harness-$VERSION.tgz" $flags
           else
             echo "::warning::lily-harness@$VERSION is not on npm and no publishing method is configured: skipping npm publish."
           fi

@@ -9,6 +9,9 @@
 **Reproducibility**
 - The model-visible prompt changed, so the kernel identifier is now `lily-kernel/0.1.1` (previously `lily-kernel/0.1.0`). Pi dependencies remain pinned to 0.85.1.
 
+**Releases**
+- The release workflow uses an explicit local tarball path for `npm publish`, preventing npm from interpreting `out/<package>.tgz` as a GitHub repository.
+
 ## 0.2.0 — 2026-09-28
 
 Mechanisms for programs that drive many isolated runs — schedulers, evaluators, trainers — over the HTTP API or the SDK.

@@ -1,6 +1,6 @@
 {
   "name": "lily-harness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lily: a terminal coding agent whose every run is isolated, pinned and recorded — a daily agent and a clean trajectory generator",
   "type": "module",
   "repository": {

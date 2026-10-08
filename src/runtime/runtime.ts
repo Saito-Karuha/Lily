@@ -25,7 +25,7 @@ import {
 	viewRecordedCall,
 } from "../trajectory/replay.ts";
 import { LilyError } from "../util/errors.ts";
-import type { SessionBinding } from "./binding.ts";
+import { parseToolExecution, type SessionBinding, type ToolExecutionMode } from "./binding.ts";
 import { LilySession, readBinding, type RuntimeServices, type SessionInit } from "./session.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -50,6 +50,7 @@ export interface SessionSummary {
 	title?: string;
 	mode: SessionBinding["mode"];
 	model: string;
+	toolExecution: ToolExecutionMode;
 	bundle: string | null;
 	createdAt: number;
 	updatedAt: number;
@@ -217,6 +218,7 @@ export class LilyRuntime {
 				...(binding.title ? { title: binding.title } : {}),
 				mode: binding.mode,
 				model: binding.model,
+				toolExecution: open?.toolExecution ?? parseToolExecution(binding.toolExecution),
 				bundle: binding.bundle,
 				createdAt: binding.createdAt,
 				updatedAt: Math.max(binding.updatedAt, meta.modifiedAt),
@@ -278,6 +280,7 @@ export class LilyRuntime {
 			mode: source.binding.mode,
 			model: source.binding.model,
 			thinking: source.binding.thinking,
+			toolExecution: source.toolExecution,
 			bundle: source.binding.bundle,
 			environment: spec,
 			...(source.binding.title ? { title: `${source.binding.title} (${kind})` } : {}),

@@ -33,11 +33,11 @@ import { EventLog } from "../store/event-log.ts";
 import type { LilyHome } from "../store/home.ts";
 import { LILY_KERNEL_VERSION, type ModelCallRecord, type RunManifest, type RunOutcome, RunStore } from "../store/runs.ts";
 import { deferred } from "../util/async.ts";
-import { readJsonIfExists, writeJsonAtomic } from "../util/fsx.ts";
+import { readJsonIfExists, writeFileAtomic, writeJsonAtomic } from "../util/fsx.ts";
 import { LilyError } from "../util/errors.ts";
 import { digestOf, sha256 } from "../util/hash.ts";
 import { newId } from "../util/ids.ts";
-import type { SessionBinding } from "./binding.ts";
+import { parseToolExecution, type SessionBinding, type ToolExecutionMode } from "./binding.ts";
 import type { LilyEvent } from "./events.ts";
 
 export const PI_VERSION = "0.85.1";
@@ -60,6 +60,8 @@ export interface SessionInit {
 	mode: "interactive" | "batch";
 	model: string;
 	thinking?: ThinkingLevel;
+	/** Same-turn execution mode, fixed for this session. Defaults to sequential. */
+	toolExecution?: ToolExecutionMode;
 	/** Bundle ref or digest, `@router` to let the runtime's router choose per run, or null for the bare kernel. */
 	bundle: string | null;
 	environment: EnvironmentSpec;
@@ -123,7 +125,8 @@ async function resolveBinding(services: RuntimeServices, ref: string | null): Pr
 }
 
 export async function readBinding(home: LilyHome, sessionId: string): Promise<SessionBinding | undefined> {
-	return readJsonIfExists<SessionBinding>(bindingPath(home, sessionId));
+	const binding = await readJsonIfExists<SessionBinding>(bindingPath(home, sessionId));
+	return binding ? { ...binding, toolExecution: parseToolExecution(binding.toolExecution) } : undefined;
 }
 
 /**
@@ -139,6 +142,7 @@ export class LilySession {
 	readonly #services: RuntimeServices;
 	readonly #session: Session<JsonlSessionMetadata>;
 	readonly #ledger: InvocationLedger;
+	readonly #toolExecution: ToolExecutionMode;
 	/** This session's model gateway: records every request of its runs (never shared across sessions). */
 	readonly #models: RecordingModels;
 	#harness!: AgentHarness<LilyToolContext>;
@@ -158,6 +162,7 @@ export class LilySession {
 		this.#services = services;
 		this.#session = session;
 		this.binding = binding;
+		this.#toolExecution = parseToolExecution(binding.toolExecution);
 		this.id = session.metadata.id;
 		this.events = new EventLog<LilyEvent>(join(services.home.sessionMeta(this.id), "events.jsonl"));
 		this.#ledger = new InvocationLedger(join(services.home.sessionMeta(this.id), "ledger.jsonl"));
@@ -165,6 +170,7 @@ export class LilySession {
 	}
 
 	static async create(services: RuntimeServices, init: SessionInit): Promise<LilySession> {
+		const toolExecution = parseToolExecution(init.toolExecution);
 		const bundleDigest = await resolveBinding(services, init.bundle);
 		const piSession = init.piSession ?? (await services.repo.create({ cwd: `/lily/${init.mode}` }, ctx));
 		const now = Date.now();
@@ -176,6 +182,7 @@ export class LilySession {
 			mode: init.mode,
 			model: init.model,
 			thinking: init.thinking ?? "off",
+			toolExecution,
 			bundle: bundleDigest,
 			environment: { spec: init.environment },
 			runs: [],
@@ -207,6 +214,10 @@ export class LilySession {
 		return this.#session.metadata;
 	}
 
+	get toolExecution(): ToolExecutionMode {
+		return this.#toolExecution;
+	}
+
 	get busy(): boolean {
 		return this.#active !== undefined;
 	}
@@ -236,13 +247,13 @@ export class LilySession {
 				models: this.#models,
 				model: this.#model(this.binding.model),
 				thinkingLevel: this.binding.thinking,
-				tools: createLilyTools(),
+				tools: createLilyTools(this.#toolExecution),
 				toolContext: () => {
 					if (!this.#pinned) throw new Error("No run is active: tools need a pinned run environment");
 					return { gateway: this.#pinned.gateway };
 				},
 				systemPrompt: () => this.#pinned?.systemPrompt ?? assembleSystemPrompt(undefined, { workspace: "/workspace" }).text,
-				toolExecution: "sequential",
+				toolExecution: this.#toolExecution,
 				compaction: {
 					enabled: compaction?.enabled ?? true,
 					reserveTokens: compaction?.reserveTokens ?? 16_384,
@@ -312,7 +323,8 @@ export class LilySession {
 				runId: runId(),
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
-				isError: event.isError,
+				// Pi may skip after_tool during abort; the recorded observation still has the true error flag.
+				isError: details?.lily?.isError ?? event.isError,
 				content: event.result.content.map((part) =>
 					part.type === "text" ? { type: "text", text: part.text } : { type: "image", mimeType: part.mimeType },
 				),
@@ -361,7 +373,7 @@ export class LilySession {
 	}
 
 	async #saveBinding(): Promise<void> {
-		this.binding.updatedAt = Date.now();
+		Object.assign(this.binding, { toolExecution: this.#toolExecution, updatedAt: Date.now() });
 		await writeJsonAtomic(bindingPath(this.#services.home, this.id), this.binding);
 	}
 
@@ -472,6 +484,7 @@ export class LilySession {
 				piAgentCore: PI_VERSION,
 				piAi: PI_VERSION,
 				toolsDigest: digestOf(tools),
+				toolExecution: this.#toolExecution,
 				compaction,
 				observationCapBytes: DEFAULT_OBSERVATION_CAP_BYTES,
 			},
@@ -495,7 +508,7 @@ export class LilySession {
 			onOutcomeUnknown: () => this.#stop("outcome_unknown", "blocked"),
 			onEnvironmentUnavailable: () => this.#stop("environment_lost", "failed"),
 			onSettled: ({ invocationId, toolCallId, raw, meta }) => {
-				void store.tools.append({
+				return store.tools.append({
 					runId,
 					invocationId,
 					toolCallId,
@@ -508,7 +521,7 @@ export class LilySession {
 					reconciled: Boolean(meta.reconciled),
 					durationMs: meta.durationMs,
 					at: Date.now(),
-				});
+				}, { durable: true });
 			},
 		});
 		const usageAtStart = await lease.usage();
@@ -526,6 +539,7 @@ export class LilySession {
 
 	/** Starts a run; resolves once it is accepted. `done` settles when it ends. */
 	async prompt(text: string, options: RunOptions = {}): Promise<RunHandle> {
+		if (Object.hasOwn(options, "toolExecution")) throw new LilyError("invalid_tool_execution", "toolExecution is fixed at session creation; create a new session to change it");
 		if (this.#closed) throw new LilyError("session_closed", "Session is closed");
 		if (this.#active) throw new LilyError("session_busy", "A run is already active in this session");
 		const runId = newId("run");
@@ -695,6 +709,25 @@ export class LilySession {
 		if (!runId || !store || !manifest || existing) {
 			await this.#abandon(operationId);
 			return;
+		}
+		// The ledger is authoritative if a crash interrupted the per-run projection.
+		const tools = await store.tools.readAll();
+		const recorded = new Set(tools.map((tool) => tool.invocationId));
+		let repaired = false;
+		for (const [invocationId, { dispatched, completed }] of this.#ledger.all()) {
+			if (dispatched?.runId !== runId || !completed || recorded.has(invocationId)) continue;
+			tools.push({
+				runId, invocationId, toolCallId: dispatched.toolCallId, toolName: dispatched.toolName,
+				args: dispatched.args, isError: completed.isError, rawRef: completed.rawRef,
+				rawComplete: completed.rawComplete, processorId: completed.processorId,
+				reconciled: true, durationMs: completed.durationMs, at: completed.at,
+			});
+			repaired = true;
+		}
+		if (repaired) {
+			tools.sort((a, b) => a.at - b.at);
+			// Atomic replacement also removes a torn trailing line from the old file.
+			await writeFileAtomic(store.tools.path, tools.map((tool) => `${JSON.stringify(tool)}\n`).join(""));
 		}
 		const active: ActiveRun = { runId, operationId, startedAt: manifest.createdAt, turns: 0, toolCalls: 0, calls: [] };
 		const gatewayUnavailable = new ExecutionGateway({

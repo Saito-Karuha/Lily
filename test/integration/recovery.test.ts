@@ -51,6 +51,42 @@ describe("worker crash recovery", () => {
 		}
 	});
 
+	it.each([false, true])("preserves completed parallel evidence without replay (damaged projection: %s)", async (damaged) => {
+		const home = await tempDir("lily-parallel-home-");
+		const workspace = await tempDir("lily-parallel-ws-");
+		const child = await run(process.execPath, [join(import.meta.dirname, "../fixtures/parallel-crash-worker.ts"), home, workspace], { timeout: 10_000 }).catch((error) => error as { stdout: string; signal?: string });
+		expect((child as { signal?: string }).signal).toBe("SIGKILL");
+		const sessionId = child.stdout.trim();
+		const models = createModels();
+		const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+		models.setProvider(faux.provider);
+		faux.setResponses([turn.text("recovered")]);
+		const runtime = await LilyRuntime.create({ home, config: { model: "faux/faux-1" }, models, backends: [new LocalBackend()] });
+		try {
+			const ledgerFile = new JsonlFile<LedgerRecord>(join(runtime.home.sessionMeta(sessionId), "ledger.jsonl"));
+			const before = await ledgerFile.readAll();
+			expect(before.filter((r) => r.type === "dispatched")).toHaveLength(3);
+			expect(before.filter((r) => r.type === "completed")).toHaveLength(1);
+			// A crash can happen after ledger commit but before the run projection is complete.
+			const runId = (await listRunIds(runtime.home.runs))[0]!;
+			const projection = new RunStore(runtime.home.run(runId)).tools;
+			expect((await projection.readAll()).map((r) => r.toolCallId)).toEqual(["fast"]);
+			if (damaged) await writeFile(projection.path, '{"torn":');
+			const session = await runtime.openSession(sessionId);
+			expect(session.toolExecution).toBe("parallel");
+			const store = new RunStore(runtime.home.run(session.binding.runs[0]!));
+			expect(await store.readOutcome()).toMatchObject({ status: "interrupted", reason: "worker_restarted" });
+			expect((await store.tools.readAll()).map((r) => r.toolCallId)).toEqual(["fast"]);
+			expect(await ledgerFile.readAll()).toEqual(before);
+			expect(faux.state.callCount).toBe(0);
+			for (const name of ["fast", "slow-a", "slow-b"]) expect(await readFile(join(workspace, `${name}.log`), "utf8")).toBe("once\n");
+			expect((await (await session.prompt("continue")).done).status).toBe("completed");
+			for (const name of ["fast", "slow-a", "slow-b"]) expect(await readFile(join(workspace, `${name}.log`), "utf8")).toBe("once\n");
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	it("starts with files other tools leave in the data directory (Finder's .DS_Store)", async () => {
 		const t = await testRuntime();
 		t.faux.setResponses([turn.text("first"), turn.text("second")]);

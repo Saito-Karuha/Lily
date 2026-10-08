@@ -25,6 +25,8 @@ Lily reads `~/.lily/config.json` (`$LILY_HOME/config.json`). `lily config` print
 
 Command-line flags override the config for one invocation: `--model`, `--thinking`, `--bundle`, `--backend`, `--router`, `--home`.
 
+`toolExecution` is **not a global configuration key**. Since 0.2.2, SDK and HTTP callers can choose `"parallel"` at session creation; the default is `"sequential"`. The choice is persisted with the session and cannot be changed per run. CLI/TUI-created sessions remain sequential, while reopening a session preserves its saved mode. See [same-turn tool execution](sdk.md#same-turn-tool-execution).
+
 ## Credentials
 
 Built-in providers read their API keys from environment variables, for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY` and `MOONSHOT_API_KEY`. `lily models` lists what your keys unlock, and `lily models --all` lists every known model. By default Lily does not read host credential files. Set `allowAmbientCredentials: true` to allow them. Credentials are used on the host only and never enter the agent's environment.

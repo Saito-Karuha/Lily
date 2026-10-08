@@ -160,7 +160,8 @@ describe("Lily tools reproduce Pi 0.85.1 core tool output", () => {
 	});
 
 	it("bash: timeouts and invalid timeouts", async () => {
-		const timedOut = await expectEquivalent("bash", { command: "echo start; sleep 5", timeout: 1 });
+		// Replace the shell so its child-exit diagnostics cannot race the group kill.
+		const timedOut = await expectEquivalent("bash", { command: "echo start; exec sleep 5", timeout: 1 });
 		expect(timedOut.content[0]?.text).toBe("start\n\n\nCommand timed out after 1 seconds");
 		await expectEquivalent("bash", { command: "echo x", timeout: -1 });
 	});

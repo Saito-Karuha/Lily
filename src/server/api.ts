@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 import { COMPONENTS, type Component } from "../resources/bundle.ts";
 import type { LilyRuntime } from "../runtime/runtime.ts";
 import { readBinding } from "../runtime/session.ts";
+import { parseToolExecution } from "../runtime/binding.ts";
 import { listRunIds, RunStore } from "../store/runs.ts";
 import { exportRun, exportRunProjection } from "../trajectory/export.ts";
 import { renderTrajectoryMarkdown } from "../trajectory/render-md.ts";
@@ -168,7 +169,9 @@ export function createApi(runtime: LilyRuntime, options: ApiOptions = {}): Route
 			labels?: unknown;
 			budget?: unknown;
 			prepare?: unknown;
+			toolExecution?: unknown;
 		};
+		const toolExecution = parseToolExecution(body.toolExecution);
 		const mode = body.mode ?? "interactive";
 		if (mode !== "interactive" && mode !== "batch") throw new HttpError(400, `mode must be "interactive" or "batch"`);
 		let environment;
@@ -193,6 +196,7 @@ export function createApi(runtime: LilyRuntime, options: ApiOptions = {}): Route
 		const budget = optionalBudget(body.budget);
 		const session = await runtime.createSession({
 			mode,
+			toolExecution,
 			model: body.model ?? requireString(runtime.config.model, "model (no default model configured)"),
 			// An explicit null means "no bundle"; only a missing field falls back to the default.
 			bundle: body.bundle !== undefined ? body.bundle : (runtime.config.bundle ?? null),
@@ -229,6 +233,7 @@ export function createApi(runtime: LilyRuntime, options: ApiOptions = {}): Route
 	router.patch("/api/sessions/:id", async (ctx) => {
 		const session = await runtime.openSession(ctx.params.id!);
 		const body = (await ctx.body()) as Record<string, string | null | undefined>;
+		if (Object.hasOwn(body, "toolExecution")) throw new HttpError(400, "toolExecution is fixed at session creation; create a new session to change it");
 		if (typeof body.model === "string") await session.setModel(body.model);
 		if (body.bundle !== undefined) await session.setBundle(body.bundle);
 		if (typeof body.thinking === "string") await session.setThinking(body.thinking as never);
@@ -253,6 +258,7 @@ export function createApi(runtime: LilyRuntime, options: ApiOptions = {}): Route
 	router.post("/api/sessions/:id/prompt", async (ctx) => {
 		const session = await runtime.openSession(ctx.params.id!);
 		const body = (await ctx.body()) as { text?: string; labels?: unknown; budget?: unknown };
+		if (Object.hasOwn(body, "toolExecution")) throw new HttpError(400, "toolExecution is fixed at session creation; create a new session to change it");
 		const labels = optionalLabels(body.labels);
 		const budget = optionalBudget(body.budget);
 		const handle = await session.prompt(requireString(body.text, "text"), { ...(labels ? { labels } : {}), ...(budget ? { budget } : {}) });

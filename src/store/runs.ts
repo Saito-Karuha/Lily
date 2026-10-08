@@ -4,12 +4,13 @@ import type { EnvironmentInfo } from "../env/types.ts";
 import type { PromptBlock } from "../kernel/system-prompt.ts";
 import type { Component } from "../resources/bundle.ts";
 import type { RouteRecord } from "../resources/router.ts";
+import { parseToolExecution, type ToolExecutionMode } from "../runtime/binding.ts";
 import { JsonlFile, readJson, readJsonIfExists, writeJsonAtomic } from "../util/fsx.ts";
 import type { Digest } from "../util/hash.ts";
 import { safeSegment } from "./home.ts";
 
 /** Identifies the kernel's model-visible behavior (tools, rendering, system prompt). Bump it when that changes, not on every release. */
-export const LILY_KERNEL_VERSION = "lily-kernel/0.1.1";
+export const LILY_KERNEL_VERSION = "lily-kernel/0.1.2";
 
 /** Everything that determined a run's conditions, frozen before the first model call. */
 export interface RunManifest {
@@ -24,6 +25,8 @@ export interface RunManifest {
 		piAgentCore: string;
 		piAi: string;
 		toolsDigest: Digest;
+		/** Recorded since 0.2.2; missing in historical runs means sequential. */
+		toolExecution?: ToolExecutionMode;
 		compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
 		observationCapBytes: number;
 	};
@@ -151,8 +154,9 @@ export class RunStore {
 		return writeJsonAtomic(join(this.dir, "manifest.json"), manifest);
 	}
 
-	readManifest(): Promise<RunManifest> {
-		return readJson<RunManifest>(join(this.dir, "manifest.json"));
+	async readManifest(): Promise<RunManifest> {
+		const manifest = await readJson<RunManifest>(join(this.dir, "manifest.json"));
+		return { ...manifest, kernel: { ...manifest.kernel, toolExecution: parseToolExecution(manifest.kernel.toolExecution) } };
 	}
 
 	writeOutcome(outcome: RunOutcome): Promise<void> {

@@ -6,6 +6,7 @@ import { createApi } from "../../src/server/api.ts";
 import { createHttpServer } from "../../src/server/http.ts";
 import { EXAMPLES, sampleRepo, testRuntime, turn } from "../helpers/runtime.ts";
 import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Server } from "node:http";
 
 let runtime: LilyRuntime;
@@ -182,6 +183,41 @@ describe("HTTP API", () => {
 		expect((await api("/api/bundles")).refs.mixed).toBe(composed.digest);
 		const missing = await fetch(`${base}/api/bundles/compose`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ parts: { P: "base" } }) });
 		expect(missing.status).toBe(400);
+	});
+
+	it("creates fixed parallel sessions and rejects invalid modes or later changes", async () => {
+		const input = { mode: "batch", backend: "local", bundle: null, toolExecution: "parallel" };
+		for (const invalid of [null, "", "auto", false, 2, { mode: "parallel", maxConcurrency: 2 }]) {
+			const response = await fetch(`${base}/api/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, toolExecution: invalid }) });
+			expect(response.status).toBe(400);
+			expect((await response.json()).error.code).toBe("invalid_tool_execution");
+		}
+		const created = await api("/api/sessions", { method: "POST", body: JSON.stringify(input) });
+		expect(created.binding.toolExecution).toBe("parallel");
+		const id = created.sessionId;
+		const patch = await fetch(`${base}/api/sessions/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ toolExecution: "sequential" }) });
+		expect(patch.status).toBe(400);
+		expect((await patch.json()).error.message).toContain("fixed at session creation");
+		const override = await fetch(`${base}/api/sessions/${id}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "go", toolExecution: "sequential" }) });
+		expect(override.status).toBe(400);
+		await api(`/api/sessions/${id}`, { method: "PATCH", body: JSON.stringify({ model: "faux/faux-1", thinking: "off", bundle: null }) });
+		expect((await api(`/api/sessions/${id}`)).binding.toolExecution).toBe("parallel");
+		faux.setResponses([
+			fauxAssistantMessage([
+				fauxToolCall("bash", { command: "printf a" }, { id: "a" }),
+				fauxToolCall("bash", { command: "printf b" }, { id: "b" }),
+			], { stopReason: "toolUse" }),
+			turn.text("both done"),
+		]);
+		const { runId } = await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "go" }) });
+		await readEvents(`/api/sessions/${id}/events`, (m) => m.event.type === "run_end");
+		const trajectory = await api(`/api/runs/${runId}/trajectory`);
+		expect(trajectory.outcome.status).toBe("completed");
+		expect(trajectory.manifest.kernel.toolExecution).toBe("parallel");
+		expect(trajectory.calls[1].context.messages.filter((m: { role: string }) => m.role === "toolResult").map((m: { toolCallId: string }) => m.toolCallId)).toEqual(["a", "b"]);
+		expect((await api(`/api/sessions/${id}/fork`, { method: "POST", body: "{}" })).binding.toolExecution).toBe("parallel");
+		const sequential = await api("/api/sessions", { method: "POST", body: JSON.stringify({ mode: "batch", backend: "local", bundle: null }) });
+		expect(sequential.binding.toolExecution).toBe("sequential");
 	});
 
 	it("returns structured errors", async () => {

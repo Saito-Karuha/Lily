@@ -9,7 +9,7 @@
 // Runtime, sessions, runs
 export { LilyRuntime, defaultBackends, type RuntimeOptions, type SessionSummary } from "./runtime/runtime.ts";
 export { LilySession, readBinding, type RunHandle, type RunOptions, type SessionInit } from "./runtime/session.ts";
-export type { SessionBinding } from "./runtime/binding.ts";
+export type { SessionBinding, ToolExecutionMode } from "./runtime/binding.ts";
 export type { LilyEvent } from "./runtime/events.ts";
 export { LILY_VERSION } from "./server/api.ts";
 

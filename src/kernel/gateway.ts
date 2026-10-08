@@ -58,7 +58,7 @@ export interface GatewayOptions {
 	/** Called when a tool is requested but the environment is already gone (nothing dispatched). */
 	onEnvironmentUnavailable?: () => void;
 	/** Called after every settled execution (fresh or reconciled). */
-	onSettled?: (event: { invocationId: string; toolCallId: string; raw: RawEnvelope; observation: Observation; meta: LilyToolMeta }) => void;
+	onSettled?: (event: { invocationId: string; toolCallId: string; raw: RawEnvelope; observation: Observation; meta: LilyToolMeta }) => void | Promise<void>;
 }
 
 export interface GatewayCall {
@@ -156,7 +156,7 @@ export class ExecutionGateway {
 			at: Date.now(),
 		});
 		const meta = this.#meta(call, raw, rawRef, observation, capped, false);
-		this.#options.onSettled?.({ invocationId: call.invocationId, toolCallId: call.toolCallId, raw, observation, meta });
+		await this.#options.onSettled?.({ invocationId: call.invocationId, toolCallId: call.toolCallId, raw, observation, meta });
 		return toToolResult(observation, meta);
 	}
 
@@ -165,7 +165,7 @@ export class ExecutionGateway {
 		const observation = await this.#options.artifacts.getJson<Observation>(completed.observationRef);
 		const meta = this.#meta(call, raw, completed.rawRef, observation, false, true);
 		meta.processorId = completed.processorId;
-		this.#options.onSettled?.({ invocationId: call.invocationId, toolCallId: call.toolCallId, raw, observation, meta });
+		await this.#options.onSettled?.({ invocationId: call.invocationId, toolCallId: call.toolCallId, raw, observation, meta });
 		return toToolResult(observation, meta);
 	}
 
@@ -249,7 +249,7 @@ export interface LilyToolContext {
  * then returns the recorded result or stops the run — it never re-runs an
  * effect whose outcome is unknown.
  */
-export function createLilyTools(): AgentHarnessTool<LilyToolContext>[] {
+export function createLilyTools(executionMode: "sequential" | "parallel" = "sequential"): AgentHarnessTool<LilyToolContext>[] {
 	const specs = piToolSpecs();
 	return KERNEL_TOOL_NAMES.map((name) => {
 		const spec = specs[name];
@@ -259,7 +259,7 @@ export function createLilyTools(): AgentHarnessTool<LilyToolContext>[] {
 			description: spec.description,
 			parameters: spec.parameters,
 			...(spec.prepareArguments ? { prepareArguments: spec.prepareArguments } : {}),
-			executionMode: "sequential",
+			executionMode,
 			replay: "safe",
 			async execute(toolCallId, params, onUpdate, toolContext, invocation, context) {
 				if (!isKernelToolName(name)) throw new Error(`Unknown tool ${name}`);

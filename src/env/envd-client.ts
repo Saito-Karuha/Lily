@@ -162,6 +162,7 @@ export class EnvdClient {
 	 * still waits for the exit event, so callers always learn how the process ended.
 	 */
 	async exec(request: ExecRequest, handlers: ExecHandlers = {}, signal?: AbortSignal): Promise<ExecExit> {
+		if (signal?.aborted) throw abortError();
 		const id = request.id ?? newId("exec");
 		if (this.#execs.has(id)) throw new Error(`exec id already in use: ${id}`);
 		let resolveExit!: (exit: ExecExit) => void;

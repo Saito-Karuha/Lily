@@ -11,7 +11,7 @@ Errors are `{"error": {"code", "message"}}`:
 
 | status | codes |
 |---|---|
-| 400 | `bad_request` (missing/invalid field, malformed JSON, unknown field in an environment spec or view request, path parameter containing `/`, `\`, `.` or `..`), `invalid_id`, `session_busy` (a run is active), `not_running` (steer without a run), `session_closed`, `unknown_model`, `no_router` (an `@router` session but no router configured), `invalid_environment` (a spec the backend cannot provide, e.g. `initialState: image` on `local`, an unknown backend or Firecracker image), `backend_unavailable`, `invalid_view`; errors reported by the environment's envd (`permission_denied`, `is_directory`, …) |
+| 400 | `bad_request` (missing/invalid field, malformed JSON, unknown field in an environment spec or view request, path parameter containing `/`, `\`, `.` or `..`), `invalid_id`, `session_busy` (a run is active), `not_running` (steer without a run), `session_closed`, `unknown_model`, `no_router` (an `@router` session but no router configured), `invalid_environment` (a spec the backend cannot provide, e.g. `initialState: image` on `local`, an unknown backend or Firecracker image), `backend_unavailable`, `invalid_view`, `invalid_tool_execution` (invalid session tool execution mode); errors reported by the environment's envd (`permission_denied`, `is_directory`, …) |
 | 403 | `forbidden_host`, `forbidden_path` (a host path outside the allowed roots) |
 | 404 | `not_found` (unknown session, run, call, entry, bundle, bundle file, route; a missing file in an environment; no live environment) |
 | 413 | `too_large` (a request body or file over the limit) |
@@ -32,12 +32,12 @@ All ids are opaque strings: sessions are UUIDv7 (`01a0…`), runs are `run_<hex>
 
 ## Sessions
 
-A session is one conversation tree plus its binding (model, bundle, environment spec). Runs happen inside sessions.
+A session is one conversation tree plus its binding (model, bundle, environment spec, fixed tool execution mode). Runs happen inside sessions.
 
 | Method | Path | Body / query | Result |
 |---|---|---|---|
 | GET | `/api/sessions?mode=interactive\|batch` | | `[SessionSummary]` newest first |
-| POST | `/api/sessions` | `{mode?, workspace?, backend?, environment?, model?, bundle?, title?, labels?, budget?, prepare?}` | `{sessionId, binding, environment?}` (see below) |
+| POST | `/api/sessions` | `{mode?, workspace?, backend?, environment?, model?, bundle?, toolExecution?, title?, labels?, budget?, prepare?}` | `{sessionId, binding, environment?}` (see below) |
 | GET | `/api/sessions/:id` | | `{binding, tipId, busy, activeRunId, environment: EnvironmentInfo\|null, lastSeq}` |
 | PATCH | `/api/sessions/:id` | `{model?, bundle? (ref or null), thinking?}` | `SessionBinding` (applies from the next run) |
 | DELETE | `/api/sessions/:id` | | `{ok}` |
@@ -70,6 +70,7 @@ Creating a session:
 - `prepare: true`: provision the environment before answering, and return its `EnvironmentInfo` as `environment`. If that fails — 503 `capacity_exhausted`, a backend error — the session is deleted and the error returned, so a session either has its environment or does not exist.
 - `bundle`: a ref/digest/prefix, `"@router"` (the server's router chooses a bundle at the start of every run — start the server with `--router <module>` or set `router` in config.json), or `null` for no bundle; omit it for the configured default.
 - `labels`: `{string: string}` recorded in every run manifest and shown to the router. `budget`: `{maxTurns?, timeoutMs?}` applied to every run.
+- `toolExecution`: `"sequential"` (default) or `"parallel"`, fixed at creation and preserved on reopen/fork. Parallel calls in the same assistant message can overlap; the next model request waits for the whole batch, and model-facing results remain in source order. There is no per-turn concurrency cap or automatic conflict detection; the caller/model must choose independent operations. See [execution and cancellation semantics](sdk.md#same-turn-tool-execution). Invalid modes, including `null`, return 400 `invalid_tool_execution`. Supplying this field to PATCH or `/prompt` returns 400 `bad_request` rather than silently changing or ignoring it.
 
 `EnvironmentSpec` (as a request body; unknown fields are rejected):
 
@@ -89,9 +90,9 @@ Creating a session:
 
 Host paths (`initialState.path`, `rootfs`) must exist and lie inside the allowed roots when those are configured.
 
-`SessionSummary`: `{sessionId, title?, mode, model, bundle, createdAt, updatedAt, runs, workspaceLabel?, labels?, parent?, open, busy}`.
+`SessionSummary`: `{sessionId, title?, mode, model, toolExecution, bundle, createdAt, updatedAt, runs, workspaceLabel?, labels?, parent?, open, busy}`.
 
-`SessionBinding`: `{sessionId, createdAt, updatedAt, title?, mode, model, thinking, bundle: digest|"@router"|null, environment: {spec, current?}, runs: string[], parent?, workspaceLabel?, labels?, budget?}`.
+`SessionBinding`: `{sessionId, createdAt, updatedAt, title?, mode, model, thinking, toolExecution, bundle: digest|"@router"|null, environment: {spec, current?}, runs: string[], parent?, workspaceLabel?, labels?, budget?}`. Old bindings without `toolExecution` are read as `"sequential"`.
 
 ### Entries (Pi session format)
 
@@ -152,7 +153,9 @@ Host paths (`initialState.path`, `rootfs`) must exist and lie inside the allowed
 
 `RunOutcome`: `{runId, status, reason?, error?, startedAt, endedAt, turns, toolCalls, modelCalls, usage: {input, output, cacheRead, cacheWrite, totalTokens, cost}, finalText?, fromTipId?, tipId?, environmentUsage?: {envId, cpuMs?, memoryPeakBytes?, source}}`. `environmentUsage.cpuMs` is the CPU time the environment used during the run; `memoryPeakBytes` is its peak since it was created (not reset between runs).
 
-`RunManifest` (abridged): `{runId, sessionId, createdAt, mode, prompt: {text, digest}, kernel: {version, piAgentCore, piAi, toolsDigest, compaction, observationCapBytes}, model: ModelConfigRecord, bundle: {digest, name, componentDigests: {P,M,S,U,F}}|null, processorId, systemPrompt: {digest, blocks: [{kind, component?, componentDigest?, text}]}, environment: EnvironmentInfo, budget, labels?, route?: {router, requested: "@router", bundle, info?}}`.
+`RunManifest` (abridged): `{runId, sessionId, createdAt, mode, prompt: {text, digest}, kernel: {version, piAgentCore, piAi, toolsDigest, toolExecution, compaction, observationCapBytes}, model: ModelConfigRecord, bundle: {digest, name, componentDigests: {P,M,S,U,F}}|null, processorId, systemPrompt: {digest, blocks: [{kind, component?, componentDigest?, text}]}, environment: EnvironmentInfo, budget, labels?, route?: {router, requested: "@router", bundle, info?}}`.
+
+`kernel.toolExecution` is recorded since 0.2.2; missing in historical manifests is read as `"sequential"` without rewriting the file. Tool schemas and the format name `lily.traj/v1` are unchanged.
 
 `ModelConfigRecord`: `{provider, modelId, api, thinkingLevel, baseUrlDigest?, headersDigest?, contextWindow, maxTokens, reasoning, input, samplingParams?, compat?, thinkingLevelMap?, tokenCapture: "vllm"|"custom"|"none", configDigest}` — the configuration that shapes the run's requests (URL and headers only as digests; they may carry credentials). `configDigest` covers all of it, so runs whose requests could differ through configuration alone have different digests. Manifests written before 0.2 have only the first four fields.
 

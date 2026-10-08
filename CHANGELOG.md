@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2 — 2026-10-08
+
+**Tool execution**
+- SDK `createSession` and HTTP `POST /api/sessions` accept `toolExecution: "parallel"` for overlapping independent tool calls in one assistant message. The default remains `"sequential"`; no existing caller needs to change.
+- The mode is fixed at session creation, persisted on reopen and inherited by forks/clones. The SDK exposes the effective value as `session.toolExecution`; invalid values and attempts at per-run overrides are rejected. There is no new global setting, CLI/TUI toggle or per-turn concurrency cap.
+- Pi's existing durable harness supplies the whole-turn barrier and source-ordered model results. Ordinary errors preserve sibling results; abort and time limits cancel all in-flight process groups, and unknown effects after transport loss or worker crashes are not replayed.
+- An already-aborted envd exec request no longer starts a command before cancelling it.
+- Completed tool records are awaited and fsynced before returning to the loop. After a worker crash, missing per-run tool records are repaired from the durable ledger without replaying effects.
+- Cancellation-time `tool_end.isError` reflects the recorded observation even when Pi skips its after-tool hook during abort.
+
+**Compatibility and records**
+- New manifests record `kernel.toolExecution`. Missing fields in old bindings/manifests mean sequential; reading them does not rewrite historical files.
+- The kernel identifier is `lily-kernel/0.1.2`. Tool schemas, the fixed system prompt, default observation formatting, resource loading and isolation policies are unchanged; Pi dependencies remain at 0.85.1.
+
 ## 0.2.1 — 2026-10-07
 
 **Fixes**

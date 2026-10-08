@@ -66,6 +66,14 @@ describe("envd client over a local environment", () => {
 		expect(Date.now() - started).toBeLessThan(5000);
 	});
 
+	it("does not dispatch a command when its signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(lease.client.exec({ id: "never-dispatched", command: "printf unwanted > should-not-exist" }, {}, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+		expect((await lease.client.request("exec.status", { id: "never-dispatched" })).state).toBe("unknown");
+		expect((await lease.env.fileInfo("should-not-exist", ctx)).ok).toBe(false);
+	});
+
 	it("never passes host environment variables into the guest", async () => {
 		process.env.LILY_TEST_SECRET = "sk-should-not-leak";
 		const chunks: Buffer[] = [];

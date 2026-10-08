@@ -149,7 +149,8 @@ func TestExecCancelKillsGroup(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestServer(t)
 	s := c.stream("c")
-	c.ok("exec.start", map[string]any{"id": "c", "command": "sleep 30 & echo $!; sleep 30"}, nil)
+	// Keep a background child, but exec the foreground wait so shell exit cannot race SIGTERM.
+	c.ok("exec.start", map[string]any{"id": "c", "command": "sleep 30 & echo $!; exec sleep 30"}, nil)
 	s.waitOutput("\n", 10*time.Second)
 	child, err := strconv.Atoi(strings.TrimSpace(s.output.String()))
 	if err != nil {
@@ -186,7 +187,8 @@ func TestExecCancelEscalatesToKill(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestServer(t)
 	s := c.stream("k")
-	c.ok("exec.start", map[string]any{"id": "k", "command": "trap '' TERM; echo ready; sleep 30"}, nil)
+	// exec preserves ignored SIGTERM and prevents a shell diagnostic race on SIGKILL.
+	c.ok("exec.start", map[string]any{"id": "k", "command": "trap '' TERM; echo ready; exec sleep 30"}, nil)
 	s.waitOutput("ready", 10*time.Second)
 	begin := time.Now()
 	c.ok("exec.cancel", map[string]any{"id": "k", "graceMs": 200}, nil)

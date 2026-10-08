@@ -15,6 +15,16 @@
 }
 ```
 
+## Tool execution mode and ordering
+
+Since 0.2.2, each new manifest records `kernel.toolExecution` (`"sequential"` or `"parallel"`), fixed at session creation and pinned before the run's first model call. `RunStore.readManifest()` and exports interpret a missing historical field as `"sequential"`; they do not rewrite old files or change their kernel version, prompt or digests. Old session bindings are read with the same default.
+
+In parallel mode, tool results in a recorded model context stay in the original assistant call order, even if they finish in another order. Events and the top-level `tools` array reflect execution/recording order, not necessarily model-context order. Associate records using `toolCallId`, `invocationId` and `rawRef`, never by array index. The next model request occurs only after the whole tool batch settles.
+
+Cancellation and uncertainty remain distinct: Bash raw envelopes carry `exec.cancelled` / `exec.timedOut`; calls prevented by the harness have kernel-generated results and no real raw execution; lost in-flight effects have `unknown` ledger records (or a durable `dispatched` without `completed` after a crash), not fabricated raw output. The top-level `tools` list contains completed raw captures, not one guaranteed entry per planned call. The per-session invocation ledger remains the durable source for effect state. Run outcomes retain the existing `aborted`, `blocked`, `interrupted` and `failed` states.
+
+Call views and observation re-rendering use the recorded IDs and raw artifacts as before. They neither replay tool effects nor simulate a new execution schedule.
+
 ## Calls
 
 Each `ExportedCall` is one real model request:

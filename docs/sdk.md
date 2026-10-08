@@ -43,7 +43,7 @@ await runtime.close();                                 // closes sessions and de
 
 ## Sessions and runs
 
-A **session** is one conversation tree plus its binding (model, thinking level, bundle, environment spec, labels, budget). A **run** is one prompt and everything it causes: model calls, tool calls, until the agent stops, is aborted, or hits its budget. Everything that determines a run is frozen in its manifest before the first model call, including the kernel version, model, bundle and component digests, system prompt blocks, observation processor, environment, budget, labels and route.
+A **session** is one conversation tree plus its binding (model, thinking level, bundle, environment spec, tool execution mode, labels, budget). A **run** is one prompt and everything it causes: model calls, tool calls, until the agent stops, is aborted, or hits its budget. Everything that determines a run is frozen in its manifest before the first model call, including the kernel version, model, bundle and component digests, system prompt blocks, observation processor, environment, budget, labels and route.
 
 | `LilySession` | |
 |---|---|
@@ -60,6 +60,35 @@ A **session** is one conversation tree plus its binding (model, thinking level, 
 `runtime.forkSession(id, {entryId, position})` copies a conversation, and `runtime.openSession(id)` reopens one from disk. Sessions are single-writer: one open worker per session per process.
 
 Everything that works on the environment between runs (`exec`, the file operations, `exportWorkspace`) provisions it when none is live and is refused with `session_busy` during a run. Paths are environment paths: absolute as given, relative ones below the workspace. None of it is recorded or shown to the model, which makes these the place for a caller's own work around a run: placing hidden test files before checking a result, fetching an artifact, preparing the next task.
+
+## Same-turn tool execution
+
+By default, a session executes tools **sequentially**, including sessions saved before 0.2.2. To allow independent calls in one assistant message to overlap, select `toolExecution` when creating the session:
+
+```ts
+const session = await runtime.createSession({
+  mode: "batch",
+  model: "provider/model-id",
+  bundle: null,
+  environment: runtime.isolatedEnvironment({ kind: "empty" }),
+  toolExecution: "parallel", // "sequential" (default) | "parallel"
+});
+console.log(session.toolExecution); // read-only effective mode
+```
+
+The mode is fixed for the session's lifetime, persisted in its binding, inherited by forks/clones, and recorded before every run as `manifest.kernel.toolExecution`. Invalid values are rejected (`invalid_tool_execution`). There is no run override or setter; create a new session to change the mode. Changing the model, thinking level or resource bundle does not change it. Treat `session.binding` as descriptive metadata, not a configuration setter.
+
+In parallel mode:
+
+- All admitted calls in the assistant message may overlap. Lily does not impose a separate per-turn concurrency cap; the environment's existing resource limits still apply.
+- The next model call waits for the entire batch to settle. Model-facing tool results follow the original assistant call order and retain their individual IDs; live events and tool execution records may arrive in completion order.
+- An ordinary tool error does not cancel successful or running siblings. Their raw results and observations are recorded independently.
+- `abort()`, the run timeout and loss of the environment stop the run without another model request. Cancellation reaches every in-flight exec's process group and waits for its exit; calls not yet admitted do not execute. A transport loss leaves in-flight effects unknown, never automatically retried.
+- After a worker crash, the existing `interrupted` / `worker_restarted` recovery contract applies: completed evidence is retained and unknown effects are not replayed. There is no seamless reattachment to in-flight processes.
+
+**Choose independent operations.** Concurrent file modifications can race; Lily does not infer dependencies, serialize conflicting file edits, merge results or provide file transactions. No subagent, business protocol or cross-session scheduler is involved.
+
+This option is exposed in the SDK and [HTTP session creation](api.md#sessions). It is not a global `config.json` key, CLI flag or TUI toggle in 0.2.2. CLI/TUI-created sessions remain sequential; resuming an existing session preserves its mode. It does not change the four tool schemas, fixed prompt, resource loading, observation formatting or isolation policy.
 
 ## Environments
 
